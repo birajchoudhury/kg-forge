@@ -69,6 +69,11 @@ logger = get_logger(__name__)
     type=str,
     help="Comma-separated entity types to exclude"
 )
+@click.option(
+    "--namespace",
+    type=str,
+    help="Target namespace (alphanumeric only, default from config)"
+)
 @click.pass_context
 def render(
     ctx: click.Context,
@@ -149,9 +154,9 @@ def render(
         console.print("Testing Neo4j connection...")
         try:
             neo4j_client.connect()
-            console.print("[green]✓[/green] Connected to Neo4j")
+            console.print("[green]OK[/green] Connected to Neo4j")
         except GraphConnectionError as e:
-            console.print(f"[red]✗[/red] Neo4j connection failed: {e}")
+            console.print(f"[red]FAIL[/red] Neo4j connection failed: {e}")
             console.print("Make sure Neo4j is running and credentials are correct.")
             sys.exit(1)
         
@@ -178,7 +183,7 @@ def render(
         # print(f"DEBUG: GraphData nodes={len(graph_data.nodes)}, rels={len(graph_data.relationships)}, is_empty={graph_data.is_empty()}")
         
         if graph_data.is_empty():
-            console.print(f"[yellow]⚠[/yellow] No graph data found for namespace '{target_namespace}'")
+            console.print(f"[yellow]WARN[/yellow] No graph data found for namespace '{target_namespace}'")
             console.print("Make sure you have ingested content with [bold]kg-forge ingest[/bold]")
             # Still generate empty visualization
         else:
@@ -203,7 +208,7 @@ def render(
         
         # Success message
         file_size = out.stat().st_size
-        console.print(f"[green]✓[/green] Visualization generated: {out} ({file_size:,} bytes)")
+        console.print(f"[green]OK[/green] Visualization generated: {out} ({file_size:,} bytes)")
         console.print(f"Open [bold]{out}[/bold] in your browser to explore the graph")
         
     except GraphConnectionError as e:

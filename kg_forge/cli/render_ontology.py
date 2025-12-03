@@ -126,7 +126,7 @@ def render_ontology(
         
         # Success message
         file_size = out.stat().st_size
-        console.print(f"[green]✓[/green] Ontology visualization generated: {out} ({file_size:,} bytes)")
+        console.print(f"[green]OK[/green] Ontology visualization generated: {out} ({file_size:,} bytes)")
         console.print(f"Open [bold]{out}[/bold] in your browser to explore the ontology")
         
     except Exception as e:

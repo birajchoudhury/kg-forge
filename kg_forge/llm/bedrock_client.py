@@ -10,7 +10,7 @@ import logging
 
 # We'll implement these imports when we add the dependencies
 try:
-    from llama_index.llms.bedrock import BedrockLLM
+    from llama_index.llms.bedrock import Bedrock
     import boto3
     from botocore.exceptions import ClientError, NoCredentialsError
     BEDROCK_AVAILABLE = True
@@ -66,7 +66,7 @@ class BedrockClient:
     def _init_client(self):
         """Initialize the LlamaIndex Bedrock LLM client."""
         try:
-            self._llm = BedrockLLM(
+            self._llm = Bedrock(
                 model=self.model_name,
                 region_name=self.region,
                 max_tokens=self.max_tokens,

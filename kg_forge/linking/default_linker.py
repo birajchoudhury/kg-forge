@@ -159,13 +159,10 @@ class DefaultEntityLinker:
             candidates = []
             for record in results:
                 candidate = KGCandidate(
-                    kg_id=record["kg_id"],
+                    entity_id=record["kg_id"],
                     name=record["name"],
-                    entity_type=record["entity_type"],
-                    namespace=record["namespace"],
-                    description=record.get("description"),
-                    properties=record.get("properties", {}),
-                    similarity_score=1.0  # Exact match
+                    score=1.0,  # Exact match
+                    match_reason="exact_name_match"
                 )
                 candidates.append(candidate)
             
@@ -372,7 +369,7 @@ class DefaultEntityLinker:
         confidence = 0.0
         
         # Name similarity (40% weight)
-        name_sim = candidate.similarity_score
+        name_sim = candidate.score
         confidence += 0.4 * name_sim
         
         # Type exactness (30% weight)
@@ -433,7 +430,7 @@ class DefaultEntityLinker:
                 candidates=[cand for cand, _ in scored_candidates],
                 action="link_existing",
                 metadata={
-                    "best_similarity": best_candidate.similarity_score,
+                    "best_similarity": best_candidate.score,
                     "backend": "default"
                 }
             )

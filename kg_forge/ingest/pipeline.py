@@ -114,14 +114,24 @@ class IngestPipeline:
         # Initialize Neo4j client
         self.neo4j_client = Neo4jClient(self.config)
         
-        # Initialize extraction backend
-        extraction_config = {
-            'model_name': model or self.config.aws.bedrock_model_name,
-            'fake_mode': fake_llm,
-            'region': self.config.aws.default_region,
-            'max_tokens': self.config.aws.bedrock_max_tokens,
-            'temperature': self.config.aws.bedrock_temperature
-        }
+        # Initialize extraction backend with backend-specific config
+        if self.extractor == "llm":
+            extraction_config = {
+                'model_name': model or self.config.aws.bedrock_model_name,
+                'fake_mode': fake_llm,
+                'region': self.config.aws.default_region,
+                'max_tokens': self.config.aws.bedrock_max_tokens,
+                'temperature': self.config.aws.bedrock_temperature
+            }
+        elif self.extractor == "spacy":
+            extraction_config = {
+                'fake_mode': fake_llm,
+                'spacy_model': "en_core_web_sm"
+            }
+        else:  # fake backend
+            extraction_config = {
+                'fake_mode': True
+            }
         self.extraction_backend = create_extraction_backend(self.extractor, extraction_config)
         self.active_ontology = active_pack
         
@@ -552,13 +562,21 @@ class IngestPipeline:
         # Use canonical name for normalization
         normalized_name = canonical_entity.canonical_name.lower().strip()
         
+        # Flatten features into Neo4j-compatible properties
+        features = canonical_entity.features or {}
+        dedup_method = features.get("dedup_method", "unknown")
+        original_mention_id = features.get("original_mention_id", "unknown")
+        confidence = float(features.get("confidence", 1.0))
+        
         # Create or merge entity node
         query = """
         MERGE (e:Entity {namespace: $namespace, entity_type: $entity_type, normalized_name: $normalized_name})
         SET e.name = $name,
             e.aliases = $aliases,
             e.mention_count = $mention_count,
-            e.features = $features,
+            e.dedup_method = $dedup_method,
+            e.original_mention_id = $original_mention_id,
+            e.confidence = $confidence,
             e.last_seen_at = datetime(),
             e.kg_id = CASE WHEN e.kg_id IS NULL THEN randomUUID() ELSE e.kg_id END
         RETURN e.kg_id as kg_id
@@ -571,7 +589,9 @@ class IngestPipeline:
                        name=canonical_entity.canonical_name,
                        aliases=canonical_entity.aliases,
                        mention_count=len(canonical_entity.mention_ids),
-                       features=canonical_entity.features)
+                       dedup_method=dedup_method,
+                       original_mention_id=original_mention_id,
+                       confidence=confidence)
         
         # Get the kg_id for use in relationships
         record = result.single()
@@ -593,12 +613,17 @@ class IngestPipeline:
     
     def _create_canonical_relationship(self, tx, src_entity_kg_id: str, dst_entity_kg_id: str, relation) -> None:
         """Create relationship between canonical entities."""
+        # Extract and flatten features
+        features = relation.features or {}
+        confidence = float(features.get('confidence', 0.5))
+        extraction_method = features.get('extraction_method', 'unknown')
+        
         query = """
         MATCH (src:Entity {kg_id: $src_kg_id})
         MATCH (dst:Entity {kg_id: $dst_kg_id})
         MERGE (src)-[r:RELATION {type: $relation_type}]->(dst)
         SET r.confidence = $confidence,
-            r.features = $features,
+            r.extraction_method = $extraction_method,
             r.created_at = CASE WHEN r.created_at IS NULL THEN datetime() ELSE r.created_at END,
             r.last_seen_at = datetime()
         """
@@ -607,5 +632,5 @@ class IngestPipeline:
                src_kg_id=src_entity_kg_id,
                dst_kg_id=dst_entity_kg_id,
                relation_type=relation.type,
-               confidence=relation.features.get('confidence', 0.5),
-               features=relation.features)
+               confidence=confidence,
+               extraction_method=extraction_method)
