@@ -20,3 +20,16 @@ app:
   ontology_pack: ai_ml_confluence
   # Directory containing ontology packs (relative to project root)
   ontology_packs_dir: ontology_packs
+  # Default extraction and deduplication backends
+  default_extractor: llm
+  default_dedup_backend: splink
+  
+  # Deduplication Backend Configuration
+  dedup_similarity_threshold: 0.8        # Minimum similarity for clustering entities (0.0-1.0)
+  dedup_max_clusters: 1000               # Maximum number of entity clusters per document
+  dedup_ensemble_strategy: confidence_weighted  # Strategy for ensemble backend: confidence_weighted, voting, union
+  
+  # Entity Linking Configuration  
+  linking_similarity_threshold: 0.8      # Minimum similarity for linking to existing entities (0.0-1.0)
+  linking_max_candidates: 5              # Maximum candidates to consider per entity
+  linking_create_missing: true           # Whether to create new entities when no matches found

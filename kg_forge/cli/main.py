@@ -1,7 +1,7 @@
 """Main CLI entry point for kg-forge."""
 
 import click
-from typing import Optional, Dict, Any
+from typing import Optional
 from rich.console import Console
 
 from kg_forge import __version__
@@ -78,13 +78,19 @@ cli.add_command(entities)
 from kg_forge.cli.neo4j_ops import neo4j
 cli.add_command(neo4j)
 
-# Import and add the llm-test command
-from kg_forge.cli.llm_test import llm_test
-cli.add_command(llm_test)
+# llm-test command removed - use extract-test instead
 
 # Import and add ontology management commands
 from kg_forge.cli.ontology import ontology
 cli.add_command(ontology)
+
+# Import and add export entities command
+from kg_forge.cli.export_entities import export_entities
+cli.add_command(export_entities)
+
+# Import and add extract-test command
+from kg_forge.cli.extract_test import extract_test
+cli.add_command(extract_test)
 
 
 def main() -> None:

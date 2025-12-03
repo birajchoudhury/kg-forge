@@ -41,6 +41,18 @@ class AppConfig(BaseModel):
     entities_extract_dir: str = Field(default="entities_extract")
     ontology_pack: Optional[str] = Field(default=None)
     ontology_packs_dir: str = Field(default="ontology_packs")
+    default_extractor: str = Field(default="llm")
+    default_dedup_backend: str = Field(default="splink")
+    
+    # Deduplication backend configuration
+    dedup_similarity_threshold: float = Field(default=0.8)
+    dedup_max_clusters: int = Field(default=1000)
+    dedup_ensemble_strategy: str = Field(default="confidence_weighted")
+    
+    # Entity linking configuration
+    linking_similarity_threshold: float = Field(default=0.8)
+    linking_max_candidates: int = Field(default=5)
+    linking_create_missing: bool = Field(default=True)
 
     @field_validator('log_level')
     @classmethod
@@ -58,6 +70,49 @@ class AppConfig(BaseModel):
         if not re.match(r'^[a-zA-Z0-9]+$', v):
             raise ValueError("Namespace must be alphanumeric only (no spaces or special characters)")
         return v
+
+    @field_validator('default_extractor')
+    @classmethod
+    def validate_extractor(cls, v):
+        """Validate extraction backend."""
+        valid_extractors = ["llm", "spacy"]
+        if v.lower() not in valid_extractors:
+            raise ValueError(f"Extractor must be one of {valid_extractors}")
+        return v.lower()
+
+    @field_validator('default_dedup_backend')
+    @classmethod
+    def validate_dedup_backend(cls, v):
+        """Validate deduplication backend."""
+        valid_backends = ["none", "splink", "zingg", "both"]
+        if v.lower() not in valid_backends:
+            raise ValueError(f"Dedup backend must be one of {valid_backends}")
+        return v.lower()
+    
+    @field_validator('dedup_similarity_threshold', 'linking_similarity_threshold')
+    @classmethod
+    def validate_similarity_threshold(cls, v):
+        """Validate similarity threshold is between 0.0 and 1.0."""
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("Similarity threshold must be between 0.0 and 1.0")
+        return v
+    
+    @field_validator('dedup_max_clusters', 'linking_max_candidates')
+    @classmethod
+    def validate_positive_int(cls, v):
+        """Validate positive integer values."""
+        if v <= 0:
+            raise ValueError("Value must be a positive integer")
+        return v
+    
+    @field_validator('dedup_ensemble_strategy')
+    @classmethod
+    def validate_ensemble_strategy(cls, v):
+        """Validate ensemble strategy."""
+        valid_strategies = ["confidence_weighted", "voting", "union"]
+        if v.lower() not in valid_strategies:
+            raise ValueError(f"Ensemble strategy must be one of {valid_strategies}")
+        return v.lower()
 
 
 class Settings(BaseModel):

@@ -1,0 +1,5 @@
+This is a sample document about Knowledge Discovery.
+
+Knowledge Discovery is a product that uses Neo4j technology. The engineering team works on this product to improve its capabilities. They focus on AI/ML domains like natural language processing and graph analytics.
+
+The platform engineering team also contributes by maintaining the infrastructure. They work closely with the product team to ensure scalability and reliability.

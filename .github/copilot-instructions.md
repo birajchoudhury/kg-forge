@@ -10,5 +10,11 @@
 - Prefer adding tests under `tests/` that exercise the behaviours described in `seed_architecture.md`.
 
 ## When creating new features
-- First check whether they fit within the v1 scope from `seed_product.md`.
-- If something conflicts, prefer the product scope over new features.
+- First check whether the architeture_spec.md has changed if yes then look at the steps in 11. Implementation Plan (Steps 0–8)
+- Check which steps spec needs to be modified, modify the spec once you have modified check all the step specs reflect what is written in architecture_spec.md
+- Follow the implementation plan steps to implement the feature.
+- Add tests under `tests/` that exercise the new feature.
+- Update documentation under `docs/` as needed.
+- Ensure code is clean, well structured, and follows best practices.
+- Dont leave behind dead code or code that still has some parts of implementation from the previous spec, ensure code is always up to date with the latest spec.
+- Ensure all existing and new tests pass before finalizing the changes.

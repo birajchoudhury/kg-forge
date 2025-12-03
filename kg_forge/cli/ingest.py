@@ -57,6 +57,16 @@ logger = get_logger(__name__)
     help="Limit number of documents processed (for debugging)"
 )
 @click.option(
+    "--extractor",
+    type=click.Choice(["llm", "spacy"], case_sensitive=False),
+    help="Extraction backend (default from config)"
+)
+@click.option(
+    "--dedup-backend",
+    type=click.Choice(["none", "splink", "zingg", "both"], case_sensitive=False),
+    help="Deduplication backend (default from config)"
+)
+@click.option(
     "--fake-llm", 
     is_flag=True,
     help="Use fake LLM for testing (no API calls)"
@@ -70,6 +80,8 @@ def ingest(
     prompt_template: Optional[Path] = None,
     model: Optional[str] = None,
     max_docs: Optional[int] = None,
+    extractor: Optional[str] = None,
+    dedup_backend: Optional[str] = None,
     fake_llm: bool = False
 ) -> None:
     """
@@ -78,9 +90,10 @@ def ingest(
     This command runs the complete ingest pipeline:
     1. Discovers HTML files in source directory
     2. Parses HTML to curated documents 
-    3. Extracts entities using LLM
-    4. Stores documents and entities in Neo4j
-    5. Creates relationships between entities
+    3. Extracts entities using configurable backend (LLM or spaCy)
+    4. Applies deduplication using configurable backend (Splink/Zingg/none)
+    5. Stores documents and entities in Neo4j
+    6. Creates relationships between entities
     
     SOURCE: Root directory containing HTML files to process
     """
@@ -126,6 +139,8 @@ def ingest(
             prompt_template=prompt_template,
             model=model,
             max_docs=max_docs,
+            extractor=extractor,
+            dedup_backend=dedup_backend,
             fake_llm=fake_llm,
             config=config
         )

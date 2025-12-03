@@ -43,9 +43,10 @@ kg-forge ingest --source <path> [options]
 - `--namespace` - Experiment namespace (default: "default", alphanumeric only)
 - `--dry-run` - Extract entities but don't write to graph
 - `--refresh` - Re-import even if content hash matches
-- `--interactive` / `--biraj` - Enable interactive mode (flag parsing only)
 - `--prompt-template` - Override prompt template file
 - `--model` - Override bedrock model name
+- `--extractor` - Extraction backend: llm|spacy (default: llm)
+- `--dedup-backend` - Deduplication backend: none|splink|zingg|both (default: splink)
 - `--max-results` - Maximum results to return (default: 10)
 
 #### `kg-forge query`
@@ -131,6 +132,10 @@ BEDROCK_MODEL_NAME=anthropic.claude-3-haiku-20240307-v1:0
 # Application Configuration
 LOG_LEVEL=INFO
 DEFAULT_NAMESPACE=default
+
+# Extraction Configuration
+DEFAULT_EXTRACTOR=llm
+DEFAULT_DEDUP_BACKEND=splink
 ```
 
 ### YAML Configuration File
@@ -155,6 +160,8 @@ aws:
 app:
   log_level: INFO
   default_namespace: default
+  default_extractor: llm
+  default_dedup_backend: splink
 ```
 
 ### Configuration Loading
@@ -219,6 +226,13 @@ kg_forge/
 - `pyyaml` - YAML configuration file support
 - `rich` - Enhanced console output and logging
 
+### Additional Dependencies for Full Architecture
+- `neo4j` - Neo4j graph database driver
+- `llama-index` - LLM and KnowledgeGraphIndex integration
+- `spacy` - NLP pipeline for lexical graph extraction
+- `splink` - Probabilistic entity resolution
+- `zingg` - ML-based entity resolution (optional)
+
 ### Development Dependencies
 - `pytest` - Testing framework
 - `pytest-cov` - Coverage reporting
@@ -234,12 +248,16 @@ kg_forge/
 - Add `--help` for all commands and subcommands
 - Use Click's built-in validation where possible
 - Add `--version` flag to show version information
+- Support new extraction and deduplication backend selection via `--extractor` and `--dedup-backend` flags
+- Validate backend choices (llm|spacy for extractor, none|splink|zingg|both for dedup-backend)
 
 ### Configuration Management
 - Use Pydantic for configuration validation and type safety
 - Support .env file, YAML config files, and environment variables
 - Implement configuration precedence (CLI args > YAML > env vars > .env > defaults)
 - Provide clear error messages for missing or invalid configuration
+- Validate extraction backend choices (llm, spacy) and deduplication backend choices (none, splink, zingg, both)
+- Support default values for new extraction and deduplication settings
 
 ### Logging
 - Use Python's standard logging module with Rich handler for enhanced output
@@ -267,15 +285,18 @@ kg_forge/
 - Test configuration loading from various sources (env, YAML, CLI args)
 - Test configuration precedence order
 - Test namespace validation
-- Test error handling scenarios
+- Test extraction and deduplication backend validation
+- Test error handling scenarios for invalid backend choices
 - Mock external dependencies (not applicable in this step)
 
 ### Test Data
-- Sample .env files with various configurations
-- Sample YAML configuration files
-- Sample command-line invocations
-- Invalid configuration scenarios
+- Sample .env files with various configurations including extraction settings
+- Sample YAML configuration files with backend configurations
+- Sample command-line invocations with --extractor and --dedup-backend flags
+- Invalid configuration scenarios including invalid backend choices
 - Invalid namespace examples
+- Valid and invalid extractor backend choices (llm, spacy, invalid_choice)
+- Valid and invalid deduplication backend choices (none, splink, zingg, both, invalid_choice)
 
 ### Coverage Target
 - Aim for >90% code coverage
@@ -287,10 +308,12 @@ kg_forge/
 2. **Version Info**: `kg-forge --version` displays version information
 3. **Configuration**: Config loading works from .env file, YAML files, and environment variables with correct precedence
 4. **Namespace Validation**: Invalid namespace names are properly rejected
-5. **Error Handling**: Invalid commands/arguments show helpful error messages
-6. **Tests**: Unit tests pass with good coverage
-7. **Documentation**: README provides clear installation and usage instructions
-8. **Package Structure**: Project follows Python best practices for packaging
+5. **Backend Validation**: Invalid extractor and dedup-backend choices are properly rejected with helpful error messages
+6. **Default Values**: New extraction and deduplication backend settings use proper defaults (llm, splink)
+7. **Error Handling**: Invalid commands/arguments show helpful error messages
+8. **Tests**: Unit tests pass with good coverage
+9. **Documentation**: README provides clear installation and usage instructions
+10. **Package Structure**: Project follows Python best practices for packaging
 
 ## Next Steps
 

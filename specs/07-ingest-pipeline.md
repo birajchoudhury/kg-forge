@@ -2,7 +2,7 @@
 
 ## Overview
 
-Step 7 implements the end-to-end ingest pipeline that orchestrates all previous components into a complete workflow. The pipeline discovers HTML files under a source folder, runs curation to produce canonical documents (Step 3), uses the LLM extraction pipeline (Step 6) with entity definitions and templates (Step 4), and writes `:Doc` and `:Entity` nodes and relationships into Neo4j according to the schema (Step 5). This is the first step that runs a full path from filesystem → LLM → graph, focusing on correctness, idempotency, and hooks integration (`process_before_store`, `process_after_batch`). Step 7 does NOT handle graph visualization (that's Step 8) and does NOT implement complex dedup/merge strategies beyond the simple merge keys defined in Step 5.
+Step 7 implements the end-to-end ingest pipeline that orchestrates all previous components into a complete workflow with dual extraction and deduplication capabilities. The pipeline discovers HTML files under a source folder, runs curation to produce canonical documents (Step 3), uses configurable extraction backends from Step 6 (LLM or spaCy), applies entity resolution via configurable deduplication backends (Splink/Zingg), performs entity linking to existing KG entities, and writes `:Doc` and `:Entity` nodes and relationships into Neo4j according to the schema (Step 5). This is the first step that runs the full path from filesystem → extraction → deduplication → linking → graph, focusing on correctness, configurability, and hooks integration (`process_before_store`, `process_after_batch`). Step 7 does NOT handle graph visualization (that's Step 8).
 
 ## Scope
 
@@ -10,73 +10,117 @@ Step 7 implements the end-to-end ingest pipeline that orchestrates all previous 
 
 - Implement the ingestion pipeline that:
   - Walks the `--source` directory to discover HTML files
-  - Loads and curates HTML files into the document model (Step 2)
-  - For each curated document/chunk, builds a prompt and calls the LLM extraction pipeline (Step 5)
-  - Applies `process_before_store` hooks to the extracted metadata
+  - Loads and curates HTML files into the document model (Step 3)
+  - For each curated document, runs configurable extraction backend (Step 6) to produce LexicalGraph
+  - Applies configurable deduplication backend (Splink/Zingg/none) to produce DedupedLexicalGraph
+  - Runs entity linking to map canonical entities to existing KG entities
+  - Applies `process_before_store` hooks to the processed data
   - Upserts `:Doc` and `:Entity` nodes in Neo4j and creates:
     - `(:Doc)-[:MENTIONS]->(:Entity)` relationships
-    - Ontology-driven `(:Entity)-[:RELATION]->(:Entity)` relationships where applicable
+    - Ontology-driven `(:Entity)-[:RELATION]->(:Entity)` relationships
   - Applies `process_after_batch` hook at the end of a batch or ingest run
 - Implement full semantics for `kg-forge ingest` options:
-  - `--source`, `--namespace`, `--dry-run`, `--refresh`, `--interactive/--biraj`
-  - `--prompt-template`, `--model`
+  - `--source`, `--namespace`, `--dry-run`, `--refresh`
+  - `--prompt-template`, `--model` (for LLM backend)
+  - `--extractor` (llm|spacy), `--dedup-backend` (none|splink|zingg|both)
 - Implement **content hashing** and **idempotent ingest**:
   - Compute MD5 of curated text per document
   - Skip re-import if hash unchanged (unless `--refresh` is set)
-- Integrate LLM error-handling rules from Step 5 into batch ingest:
+- Integrate extraction error-handling rules from Step 6 into batch ingest:
   - Per-document failures are skipped with logging
-  - >10 consecutive failures abort the ingest with non-zero exit code
-- Implement basic ingest metrics (number of docs processed, skipped, failed, entities created/merged)
+  - Backend-specific consecutive failure tracking and abort logic
+- Implement comprehensive ingest metrics (docs processed, entities extracted/deduplicated/linked)
 - End-to-end tests using:
-  - Fake LLM implementation from Step 5
-  - Docker-based Neo4j fixture from Step 4
+  - Fake extraction backends from Step 6
+  - Mock deduplication backends
+  - Docker-based Neo4j fixture from Step 5
 
 ### Out of Scope
 
-- Advanced deduplication or record-linkage logic beyond the simple `(namespace, entity_type, normalized_name)` merge key
-- Complex ontology-inferred relationship creation (beyond what is directly specified in entity definitions)
-- Graph visualization and rendering (Step 7)
+- Graph visualization and rendering (Step 8)
+- Advanced Splink/Zingg configuration tuning or model training
+- Custom deduplication backend implementations beyond Splink/Zingg integration
+- Complex ontology-inferred relationship creation beyond direct entity-to-entity relations
 - KE SaaS pipeline integration (future step)
 - Multi-tenant orchestration or multi-namespace migrations (beyond using `--namespace`)
 - Performance optimizations like parallel processing or bulk import strategies
 - Advanced chunking strategies beyond 1 page = 1 chunk
+- Real-time or streaming ingest capabilities
+
+## Step Integration
+
+### Inputs from Step 5 (Neo4j Bootstrap)
+
+Step 7 depends on Step 5 providing:
+- **Neo4jClient**: Configured database connection with proper credentials and URI
+- **Database Schema**: Initialized `:Doc` and `:Entity` node types with constraints and indexes
+- **Merge Key Constraints**: 
+  - `:Doc` nodes: `(namespace, doc_id)` uniqueness constraint
+  - `:Entity` nodes: `(namespace, entity_type, normalized_name)` uniqueness constraint
+- **Graph Database**: Empty or existing Neo4j database ready for content ingestion
+- **Test Infrastructure**: Docker-based Neo4j fixture for testing
+
+### Outputs to Step 7 Sub-Components
+
+This specification implements Step 7c (Pipeline Wiring) which orchestrates:
+
+**Step 7a (Deduplication Backend) - Implemented in this spec:**
+- Input: `LexicalGraph` from Step 6 extraction backends
+- Output: `DedupedLexicalGraph` with `CanonicalLexicalEntity` instances
+- Backends: Splink, Zingg, or no-dedup pass-through
+
+**Step 7b (Entity Linking Backend) - Implemented in this spec:**
+- Input: `CanonicalLexicalEntity` instances from Step 7a
+- Output: `LinkResult` objects with linking decisions (existing vs new entities)
+- Process: Matches canonical entities against existing Neo4j KG entities
+
+**Step 7c (Pipeline Wiring) - This specification:**
+- Input: All outputs from Steps 3, 5, and 6
+- Output: Fully populated Neo4j Knowledge Graph ready for Step 8 visualization
+- Process: End-to-end orchestration from HTML → extraction → deduplication → linking → storage
 
 ## Pipeline Design
 
 The ingest pipeline follows this sequence:
 
-1. **Configuration Resolution**: Load settings from Step 1 and merge CLI options with precedence
-2. **File Discovery**: Walk `--source` directory recursively, filtering for `.html` files with stable ordering
-3. **Per-Document Processing**: For each HTML file:
+1. **Configuration Resolution**: Load settings from Step 0 and merge CLI options with precedence
+2. **Backend Initialization**: Initialize extraction backend (`--extractor`) and dedup backend (`--dedup-backend`)
+3. **File Discovery**: Walk `--source` directory recursively, filtering for `.html` files with stable ordering
+4. **Per-Document Processing**: For each HTML file:
    - Derive `doc_id` from relative path (without extension, normalized)
    - Extract `source_path`, apply `namespace` from config/CLI
-   - Run HTML → curated text transformation using Step 2's document loader
+   - Run HTML → curated text transformation using Step 3's document loader
    - Compute `content_hash` (MD5) over curated text content
    - Check Neo4j for existing `:Doc` with same `(namespace, doc_id, content_hash)`:
      - If found and `--refresh` is NOT set → skip document (log as "unchanged")
      - If not found or `--refresh` is set → continue processing
-   - Call LLM extraction pipeline (Step 5) with:
-     - Curated text chunk(s) as document content
-     - Entity definitions template from Step 3
-   - Receive `ExtractionResult` (`{"entities": [...]}`) or handle failures:
-     - Apply retry & failure counter logic from Step 5
+   - **Extraction Phase**: Call configured ExtractionBackend with:
+     - Curated text content
+     - Ontology pack from Step 4
+   - Receive `LexicalGraph` (mentions + relations) or handle failures:
+     - Apply backend-specific retry & failure counter logic from Step 6
      - Skip individual failing documents while continuing batch
+   - **Deduplication Phase** (if `--dedup-backend` ≠ none):
+     - Pass `LexicalGraph` to configured DedupBackend (Splink/Zingg)
+     - Receive `DedupedLexicalGraph` with canonical entities
+   - **Entity Linking Phase**:
+     - Pass canonical entities to EntityLinkerBackend
+     - Receive `LinkResult` objects mapping to existing KG entities
    - Run `process_before_store` hook with:
-     - Original curated content (CuratedDocument object)
-     - Extracted metadata (dict from LLM result)
+     - Original curated content (ParsedDocument object)
+     - LexicalGraph or DedupedLexicalGraph
      - Neo4j client instance
    - Write to Neo4j (if not `--dry-run`):
      - Upsert `:Doc` node with content hash and metadata
-     - Upsert `:Entity` nodes for each extracted entity
-     - Create `(:Doc)-[:MENTIONS]->(:Entity)` relationships with confidence scores
-     - Create entity-entity relationships based on definitions
+     - Create/merge `:Entity` nodes for canonical entities
+     - Create `(:Doc)-[:MENTIONS]->(:Entity)` relationships
+     - Create typed entity-entity relationships from relations
    - Accumulate metrics and entity records for batch processing
-4. **Batch Completion**: After processing all documents:
+5. **Batch Completion**: After processing all documents:
    - Call `process_after_batch` hook with:
      - List of all entities created/updated in this run
      - Neo4j client instance
-     - Interactive session if `--interactive/--biraj` is enabled
-   - Log final metrics summary
+   - Log comprehensive metrics summary with pipeline stage breakdowns
 
 ### Batching Strategy
 
@@ -125,9 +169,471 @@ class HookRegistry:
 - **Hook Discovery**: Hooks are auto-registered by importing modules in `kg_forge/hooks/` directory
 - **Interactive Mode**: `InteractiveSession` is only available when `--interactive/--biraj` flag is set
 
+## Deduplication Data Models
+
+### CanonicalLexicalEntity
+
+Represents a cluster of mentions believed to refer to the same real-world entity.
+
+```python
+@dataclass
+class CanonicalLexicalEntity:
+    id: str                           # Stable within namespace/batch
+    entity_type: str                  # Same space as LexicalMention.entity_type
+    canonical_name: str               # Chosen surface form
+    aliases: List[str]                # All observed surface forms
+    mention_ids: List[str]            # LexicalMention.id values in this cluster
+    features: Dict[str, Any]          # Aggregated features from dedup backend
+    
+    # Common features examples:
+    # - splink_score: probabilistic linkage score
+    # - zingg_confidence: ML model confidence
+    # - mention_count: number of mentions in cluster
+    # - source_docs: set of documents where entity appears
+```
+
+### DedupedLexicalGraph
+
+Lexical graph after deduplication processing.
+
+```python
+@dataclass
+class DedupedLexicalGraph:
+    canonical_entities: List[CanonicalLexicalEntity]
+    relations: List[CanonicalRelation]
+    metadata: Dict[str, Any]
+    
+    # Metadata examples:
+    # - dedup_backend: "splink" | "zingg" | "none"
+    # - processing_time: dedup operation duration
+    # - clusters_formed: number of entity clusters created
+    # - duplicate_pairs: number of duplicate pairs identified
+```
+
+### CanonicalRelation
+
+Relation between canonical entities after deduplication.
+
+```python
+@dataclass
+class CanonicalRelation:
+    id: str                          # Unique relation identifier
+    type: str                        # e.g., "WORKS_ON", "USES", "PART_OF"
+    src_entity_id: str               # CanonicalLexicalEntity.id
+    dst_entity_id: str               # CanonicalLexicalEntity.id
+    features: Dict[str, Any]         # Aggregated from underlying LexicalRelations
+    
+    # Common features examples:
+    # - confidence: aggregated confidence score
+    # - source_relations: list of original LexicalRelation.id values
+    # - evidence_count: number of supporting mentions
+```
+
+### LinkResult
+
+Result of linking canonical entities to existing KG entities.
+
+```python
+@dataclass
+class LinkResult:
+    canonical_entity_id: str         # CanonicalLexicalEntity.id
+    existing_entity_id: Optional[str] # Neo4j entity ID if matched
+    new_entity_payload: Optional[Dict] # Properties for new entity creation
+    confidence: float                 # Linking confidence (0.0-1.0)
+    explanation: str                 # Human-readable linking rationale
+```
+
+## Deduplication Backend Interface
+
+### DedupBackend Protocol
+
+Common interface for all deduplication implementations.
+
+```python
+from typing import Protocol
+
+class DedupBackend(Protocol):
+    def deduplicate(self, lexical_graph: LexicalGraph, namespace: str) -> DedupedLexicalGraph:
+        """
+        Apply entity resolution to group mentions into canonical entities.
+        
+        Args:
+            lexical_graph: Raw extraction results with mentions and relations
+            namespace: Current processing namespace for context
+            
+        Returns:
+            DedupedLexicalGraph with canonical entities and updated relations
+        """
+        ...
+```
+
+### SpLinkDedupBackend
+
+Probabilistic entity resolution using Splink.
+
+```python
+class SpLinkDedupBackend:
+    def __init__(self, similarity_threshold: float = 0.8, blocking_rules: List[str] = None):
+        self.similarity_threshold = similarity_threshold
+        self.blocking_rules = blocking_rules or [
+            "l.entity_type = r.entity_type",
+            "substr(l.normalized_name, 1, 3) = substr(r.normalized_name, 1, 3)"
+        ]
+        
+    def deduplicate(self, lexical_graph: LexicalGraph, namespace: str) -> DedupedLexicalGraph:
+        """
+        Use Splink for probabilistic entity resolution.
+        - Convert mentions to DataFrame with features
+        - Apply blocking rules for efficiency
+        - Train/apply probabilistic model
+        - Form clusters based on similarity threshold
+        """
+        mentions_df = self._prepare_mentions_dataframe(lexical_graph.mentions)
+        
+        # Configure Splink model with comparison features
+        settings = {
+            "link_type": "dedupe_only",
+            "blocking_rules_to_generate_predictions": self.blocking_rules,
+            "comparisons": [
+                cl.exact_match("entity_type"),
+                cl.jaro_winkler_at_thresholds("normalized_name", [0.9, 0.8]),
+                cl.jaccard_at_thresholds("surface_tokens", [0.8, 0.6])
+            ]
+        }
+        
+        linker = Linker(mentions_df, settings)
+        clusters = linker.predict(threshold_match_probability=self.similarity_threshold)
+        
+        return self._build_deduped_graph(clusters, lexical_graph)
+```
+
+### ZinggDedupBackend
+
+ML-based entity resolution using Zingg.
+
+```python
+class ZinggDedupBackend:
+    def __init__(self, model_config: Dict[str, Any]):
+        self.model_config = model_config
+        self.zingg_client = None
+        
+    def deduplicate(self, lexical_graph: LexicalGraph, namespace: str) -> DedupedLexicalGraph:
+        """
+        Use Zingg for ML-based entity resolution.
+        - Convert mentions to Zingg input format
+        - Apply pre-trained ML model for matching
+        - Form clusters based on ML predictions
+        """
+        mentions_data = self._prepare_zingg_format(lexical_graph.mentions)
+        
+        # Configure Zingg pipeline
+        zingg_config = {
+            "data": mentions_data,
+            "fieldDefinitions": [
+                {"fieldName": "entity_type", "matchType": "EXACT"},
+                {"fieldName": "normalized_name", "matchType": "FUZZY"},
+                {"fieldName": "surface_text", "matchType": "TEXT"}
+            ],
+            "modelId": f"{namespace}_entity_model"
+        }
+        
+        results = self.zingg_client.match(zingg_config)
+        clusters = self._parse_zingg_results(results)
+        
+        return self._build_deduped_graph(clusters, lexical_graph)
+```
+
+### NoDedupBackend
+
+Pass-through implementation that performs no deduplication.
+
+```python
+class NoDedupBackend:
+    def deduplicate(self, lexical_graph: LexicalGraph, namespace: str) -> DedupedLexicalGraph:
+        """
+        Convert LexicalGraph to DedupedLexicalGraph without deduplication.
+        Each mention becomes its own canonical entity.
+        """
+        canonical_entities = [
+            CanonicalLexicalEntity(
+                id=mention.id,
+                entity_type=mention.entity_type,
+                canonical_name=mention.surface,
+                aliases=[mention.surface],
+                mention_ids=[mention.id],
+                features={"dedup_method": "none"}
+            )
+            for mention in lexical_graph.mentions
+        ]
+        
+        # Convert relations to canonical format
+        canonical_relations = [
+            CanonicalRelation(
+                id=rel.id,
+                type=rel.type,
+                src_entity_id=rel.src_mention_id,
+                dst_entity_id=rel.dst_mention_id,
+                features=rel.features
+            )
+            for rel in lexical_graph.relations
+        ]
+        
+        return DedupedLexicalGraph(
+            canonical_entities=canonical_entities,
+            relations=canonical_relations,
+            metadata={"dedup_backend": "none", "clusters_formed": len(canonical_entities)}
+        )
+```
+
+## Entity Linking Backend Interface
+
+### EntityLinkerBackend Protocol
+
+Common interface for mapping canonical entities to existing KG entities.
+
+```python
+from typing import Protocol, List
+
+class EntityLinkerBackend(Protocol):
+    def link_entities(self, canonical_entities: List[CanonicalLexicalEntity], namespace: str) -> List[LinkResult]:
+        """
+        Link canonical entities to existing KG entities or mark for creation.
+        
+        Args:
+            canonical_entities: Deduplicated entities to link
+            namespace: Current processing namespace for scoping
+            
+        Returns:
+            List of LinkResult objects with linking decisions
+        """
+        ...
+```
+
+### DefaultEntityLinker
+
+Production entity linking implementation using Neo4j KG matching.
+
+```python
+class DefaultEntityLinker:
+    def __init__(self, neo4j_client, similarity_threshold: float = 0.8):
+        self.neo4j_client = neo4j_client
+        self.similarity_threshold = similarity_threshold
+        self.kg_builder = KGCandidateBuilder(neo4j_client)
+        self.matcher = SimilarityMatcher()
+        
+    def link_entities(self, canonical_entities: List[CanonicalLexicalEntity], namespace: str) -> List[LinkResult]:
+        """
+        Link each canonical entity to existing KG entities or mark for creation.
+        """
+        results = []
+        
+        # Build candidate KB from Neo4j for this namespace and entity types
+        entity_types = {entity.entity_type for entity in canonical_entities}
+        candidate_kb = self.kg_builder.build_candidate_kb(namespace, entity_types)
+        
+        for canonical_entity in canonical_entities:
+            # Generate candidates from KB
+            candidates = self._generate_candidates(canonical_entity, candidate_kb)
+            
+            if not candidates:
+                # No candidates - create new entity
+                results.append(LinkResult(
+                    canonical_entity_id=canonical_entity.id,
+                    existing_entity_id=None,
+                    new_entity_payload={
+                        "namespace": namespace,
+                        "entity_type": canonical_entity.entity_type,
+                        "name": canonical_entity.canonical_name,
+                        "normalized_name": self._normalize_name(canonical_entity.canonical_name),
+                        "aliases": canonical_entity.aliases,
+                        "confidence": 1.0
+                    },
+                    confidence=1.0,
+                    explanation=f"No existing candidates found for {canonical_entity.canonical_name}"
+                ))
+                continue
+            
+            # Score candidates and select best match
+            best_candidate = self.matcher.find_best_match(canonical_entity, candidates)
+            
+            if best_candidate and best_candidate.score >= self.similarity_threshold:
+                # Link to existing entity
+                results.append(LinkResult(
+                    canonical_entity_id=canonical_entity.id,
+                    existing_entity_id=best_candidate.entity_id,
+                    new_entity_payload=None,
+                    confidence=best_candidate.score,
+                    explanation=f"Linked to existing entity via {best_candidate.match_reason}"
+                ))
+            else:
+                # Create new entity - no good matches
+                results.append(LinkResult(
+                    canonical_entity_id=canonical_entity.id,
+                    existing_entity_id=None,
+                    new_entity_payload={
+                        "namespace": namespace,
+                        "entity_type": canonical_entity.entity_type,
+                        "name": canonical_entity.canonical_name,
+                        "normalized_name": self._normalize_name(canonical_entity.canonical_name),
+                        "aliases": canonical_entity.aliases,
+                        "confidence": 1.0
+                    },
+                    confidence=1.0,
+                    explanation=f"No matches above threshold {self.similarity_threshold}"
+                ))
+        
+        return results
+        
+    def _generate_candidates(self, canonical_entity: CanonicalLexicalEntity, candidate_kb: Dict) -> List[KGCandidate]:
+        """Generate candidate entities from KB using multiple strategies."""
+        candidates = []
+        entity_type_kb = candidate_kb.get(canonical_entity.entity_type, [])
+        
+        for kb_entity in entity_type_kb:
+            # Exact normalized name match
+            if self._normalize_name(canonical_entity.canonical_name) == kb_entity.normalized_name:
+                candidates.append(KGCandidate(
+                    entity_id=kb_entity.id,
+                    name=kb_entity.name,
+                    score=1.0,
+                    match_reason="exact_normalized_name"
+                ))
+                continue
+            
+            # Check aliases for exact matches
+            canonical_aliases = {self._normalize_name(alias) for alias in canonical_entity.aliases}
+            if canonical_aliases.intersection({kb_entity.normalized_name}):
+                candidates.append(KGCandidate(
+                    entity_id=kb_entity.id,
+                    name=kb_entity.name,
+                    score=0.95,
+                    match_reason="alias_exact_match"
+                ))
+                continue
+            
+            # Fuzzy name similarity
+            name_similarity = self.matcher.compute_name_similarity(
+                canonical_entity.canonical_name, 
+                kb_entity.name
+            )
+            if name_similarity >= 0.7:
+                candidates.append(KGCandidate(
+                    entity_id=kb_entity.id,
+                    name=kb_entity.name,
+                    score=name_similarity,
+                    match_reason=f"name_similarity_{name_similarity:.2f}"
+                ))
+        
+        return sorted(candidates, key=lambda c: c.score, reverse=True)
+```
+
+### KGCandidateBuilder
+
+Builds candidate entity index from Neo4j for efficient matching.
+
+```python
+class KGCandidateBuilder:
+    def __init__(self, neo4j_client):
+        self.neo4j_client = neo4j_client
+        
+    def build_candidate_kb(self, namespace: str, entity_types: Set[str]) -> Dict[str, List[KGEntity]]:
+        """
+        Build candidate KB indexed by entity type from existing Neo4j entities.
+        """
+        candidate_kb = {}
+        
+        for entity_type in entity_types:
+            # Query existing entities of this type in namespace
+            query = """
+            MATCH (e:Entity {namespace: $namespace, entity_type: $entity_type})
+            RETURN e.id as entity_id, e.name as name, e.normalized_name as normalized_name,
+                   e.aliases as aliases, e.confidence as confidence
+            LIMIT 1000
+            """
+            
+            results = self.neo4j_client.run(query, namespace=namespace, entity_type=entity_type)
+            
+            kb_entities = []
+            for record in results:
+                kb_entities.append(KGEntity(
+                    id=record["entity_id"],
+                    name=record["name"],
+                    normalized_name=record["normalized_name"],
+                    aliases=record["aliases"] or [],
+                    confidence=record["confidence"] or 1.0
+                ))
+            
+            candidate_kb[entity_type] = kb_entities
+            
+        return candidate_kb
+```
+
+### SimilarityMatcher
+
+Computes similarity scores between canonical entities and KG candidates.
+
+```python
+class SimilarityMatcher:
+    def __init__(self):
+        self.name_matcher = NameMatcher()
+        self.phonetic_matcher = PhoneticMatcher()
+        
+    def find_best_match(self, canonical_entity: CanonicalLexicalEntity, candidates: List[KGCandidate]) -> Optional[KGCandidate]:
+        """Find the best matching candidate with combined scoring."""
+        if not candidates:
+            return None
+            
+        # Candidates are already sorted by individual scores
+        best_candidate = candidates[0]
+        
+        # Apply additional context-based scoring if available
+        context_boost = self._compute_context_similarity(canonical_entity, best_candidate)
+        best_candidate.score = min(1.0, best_candidate.score + context_boost)
+        
+        return best_candidate
+        
+    def compute_name_similarity(self, name1: str, name2: str) -> float:
+        """Compute string similarity between two entity names."""
+        # Combine multiple similarity metrics
+        jaro_score = self.name_matcher.jaro_winkler(name1, name2)
+        phonetic_score = self.phonetic_matcher.soundex_similarity(name1, name2)
+        
+        # Weighted combination
+        return (jaro_score * 0.7) + (phonetic_score * 0.3)
+        
+    def _compute_context_similarity(self, canonical_entity: CanonicalLexicalEntity, candidate: KGCandidate) -> float:
+        """Boost score based on contextual features (future enhancement)."""
+        # Could consider:
+        # - Co-occurring entities in same documents
+        # - Similar relationship patterns
+        # - Document/section context overlap
+        return 0.0  # Placeholder for future context-aware matching
+```
+
+### Entity Linking Data Models
+
+```python
+@dataclass
+class KGEntity:
+    """Existing entity from Neo4j knowledge graph."""
+    id: str                    # Neo4j entity identifier  
+    name: str                  # Display name
+    normalized_name: str       # Normalized for matching
+    aliases: List[str]         # Known aliases
+    confidence: float          # Entity confidence score
+
+@dataclass  
+class KGCandidate:
+    """Candidate entity for linking with match score."""
+    entity_id: str            # Neo4j entity identifier
+    name: str                 # Entity name
+    score: float              # Similarity/match score (0.0-1.0)
+    match_reason: str         # Explanation of why this is a candidate
+```
+
 ## Neo4j Write Behaviour
 
-Step 6 uses the Neo4j schema from Step 4 with these semantics:
+Step 7 uses the Neo4j client and schema from Step 5 with these semantics:
 
 ### Node Creation and Merging
 
@@ -190,6 +696,8 @@ kg-forge ingest --source <path> [options]
 - `--interactive` / `--biraj` (flag): Enable interactive mode for hooks
 - `--prompt-template PATH` (optional): Override default prompt template file
 - `--model TEXT` (optional): Override LLM model name from config
+- `--extractor [llm|spacy]` (optional): Override extraction backend from config
+- `--dedup-backend [none|splink|zingg|both]` (optional): Override deduplication backend from config
 - `--max-docs INTEGER` (optional): Limit number of documents processed (for debugging)
 
 ### Command Behavior
@@ -244,6 +752,19 @@ kg_forge/
 │   ├── hooks.py             # Hook registry and default implementations
 │   ├── metrics.py           # IngestMetrics class for tracking statistics
 │   └── filesystem.py        # File discovery and path utilities
+├── dedup/
+│   ├── __init__.py
+│   ├── interface.py          # DedupBackend protocol
+│   ├── splink_backend.py     # Splink implementation
+│   ├── zingg_backend.py      # Zingg implementation  
+│   ├── no_dedup_backend.py   # Pass-through implementation
+│   └── ensemble_backend.py   # Combined Splink + Zingg backend
+├── linking/
+│   ├── __init__.py
+│   ├── interface.py          # EntityLinkerBackend protocol
+│   ├── default_linker.py     # Default entity linking implementation
+│   ├── kg_candidate_builder.py  # Neo4j KB candidate generation
+│   └── similarity_matcher.py    # String/context similarity scoring
 ├── cli/
 │   ├── ingest.py            # CLI command implementation
 │   └── main.py             # Updated to include ingest command
@@ -286,11 +807,18 @@ Step 6 reuses existing dependencies without introducing new runtime requirements
 
 ### Existing Dependencies
 
-- **HTML Processing**: `beautifulsoup4` and `lxml` from Step 2
-- **Neo4j Integration**: `neo4j>=5.0.0` from Step 4  
-- **LLM Integration**: `llama-index-llms-bedrock`, `boto3` from Step 5
-- **Configuration**: `pyyaml`, `python-dotenv` from Step 1
-- **CLI Framework**: `click`, `rich` from Step 1
+- **HTML Processing**: `beautifulsoup4` and `lxml` from Step 3
+- **Neo4j Integration**: `neo4j>=5.0.0` from Step 5  
+- **Extraction Backends**: `llama-index-llms-bedrock`, `boto3`, `spacy`, from Step 6
+- **Configuration**: `pyyaml`, `python-dotenv` from Step 0
+- **CLI Framework**: `click`, `rich` from Step 0
+
+### New Deduplication Dependencies
+
+- **Splink**: `splink>=3.0.0` for probabilistic entity resolution
+- **Zingg**: `zingg` for ML-based entity resolution (optional)
+- **Pandas**: `pandas>=1.5.0` for data processing (required by Splink)
+- **DuckDB**: `duckdb` as Splink backend (lightweight, no external database required)
 
 ### Standard Library Usage
 
@@ -366,10 +894,49 @@ class IngestMetrics:
 ```
 
 **Logging Strategy**:
-- INFO: Progress updates, successful operations, final metrics
-- WARNING: Skipped documents, recoverable failures
-- ERROR: LLM failures, Neo4j write errors
-- DEBUG: Detailed pipeline steps, hook execution
+- INFO: Progress updates, successful operations, final metrics, deduplication results
+- WARNING: Skipped documents, recoverable failures, dedup threshold warnings
+- ERROR: Extraction failures, Neo4j write errors, deduplication backend failures
+- DEBUG: Detailed pipeline steps, hook execution, dedup cluster details
+
+### Deduplication Configuration
+
+**Splink Configuration**:
+```python
+@dataclass
+class SpLinkConfig:
+    similarity_threshold: float = 0.8    # Minimum probability for match
+    blocking_rules: List[str] = field(default_factory=lambda: [
+        "l.entity_type = r.entity_type",
+        "substr(l.normalized_name, 1, 3) = substr(r.normalized_name, 1, 3)"
+    ])
+    comparison_features: List[str] = field(default_factory=lambda: [
+        "exact_match_entity_type",
+        "jaro_winkler_normalized_name",
+        "jaccard_surface_tokens"
+    ])
+    training_sample_size: int = 10000
+```
+
+**Zingg Configuration**:
+```python
+@dataclass
+class ZinggConfig:
+    model_type: str = "ml"               # ML model type
+    match_threshold: float = 0.75        # Minimum confidence for match
+    field_definitions: List[Dict] = field(default_factory=lambda: [
+        {"fieldName": "entity_type", "matchType": "EXACT"},
+        {"fieldName": "normalized_name", "matchType": "FUZZY"},
+        {"fieldName": "surface_text", "matchType": "TEXT"}
+    ])
+    training_enabled: bool = True
+```
+
+**Backend Selection Logic**:
+- `none`: Use NoDedupBackend (each mention = separate entity)
+- `splink`: Use SpLinkDedupBackend with probabilistic matching
+- `zingg`: Use ZinggDedupBackend with ML-based matching
+- `both`: Run both backends, use ensemble scoring (Splink score * 0.6 + Zingg score * 0.4)
 
 ### Interactive Mode
 
@@ -429,6 +996,20 @@ class IngestMetrics:
 - Verify `process_after_batch` receives complete entity list
 - Test hook exception handling (logged but doesn't abort pipeline)
 
+**Deduplication Testing** (`test_ingest_deduplication.py`):
+- Test each deduplication backend (none, splink, zingg) with known duplicate entities
+- Verify canonical entity formation and alias preservation
+- Test deduplication metrics tracking (clusters formed, duplicates merged)
+- Test error handling for deduplication backend failures
+- Mock Splink/Zingg for deterministic test results
+
+**Entity Linking Testing** (`test_ingest_entity_linking.py`):
+- Test linking with existing KG entities using exact and fuzzy name matches
+- Test creation of new entities when no good candidates exist
+- Verify LinkResult generation and confidence scoring
+- Test entity linking with various similarity thresholds
+- Mock Neo4j candidate KB for deterministic test scenarios
+
 ### Test Isolation and CI
 
 **Database Isolation**:
@@ -462,11 +1043,30 @@ Step 6 is considered complete when:
 - [ ] **Hook integration**: Custom `process_before_store` and `process_after_batch` hooks are called at correct pipeline points
 - [ ] **Error resilience**: LLM failures skip individual documents, >10 consecutive failures abort with non-zero exit code
 - [ ] **Configuration integration**: CLI options override config file values following Step 1 precedence rules
-- [ ] **Metrics accuracy**: Processing statistics (docs processed/skipped/failed, entities created) are correctly tracked and reported
-- [ ] **No API changes**: Steps 2-5 components integrate without modification (composition, not modification)
-- [ ] **Test coverage**: Ingest module achieves >90% test coverage with comprehensive end-to-end scenarios
+- [ ] **Metrics accuracy**: Processing statistics (docs processed/skipped/failed, entities created/deduplicated) are correctly tracked and reported
+- [ ] **Deduplication backends**: All backends (none, splink, zingg) process test data and produce expected canonical entities
+- [ ] **Entity linking**: Canonical entities are correctly linked to existing KG entities or marked for creation
+- [ ] **Backend configuration**: CLI flags `--extractor` and `--dedup-backend` override configuration values correctly
+- [ ] **No API changes**: Steps 0-6 components integrate without modification (composition, not modification)
+- [ ] **Test coverage**: Ingest and dedup modules achieve >90% test coverage with comprehensive end-to-end scenarios
 - [ ] **CLI usability**: Command help text, error messages, and progress logging provide clear user experience
 
 ## Next Steps
 
-Step 6 provides the fully-populated Knowledge Graph based on Confluence HTML exports by orchestrating the HTML parsing (Step 2), entity extraction (Step 5), and Neo4j storage (Step 4) into a complete ingest workflow. Step 7 will leverage this populated graph to implement visualization and advanced exploration capabilities (`kg-forge render` and enhanced `kg-forge query` commands), enabling users to discover insights and relationships within their imported Confluence content. The robust ingest pipeline established in Step 6 ensures that the graph contains high-quality, structured data ready for visualization and complex querying operations.
+Step 7 provides the fully-populated Knowledge Graph based on Confluence HTML exports by orchestrating the HTML parsing (Step 3), entity extraction (Step 6), and Neo4j storage infrastructure (Step 5) into a complete ingest workflow. 
+
+**Outputs to Step 8 (Graph Rendering):**
+- **Populated Neo4j Database**: Complete knowledge graph with `:Doc` and `:Entity` nodes
+- **Rich Entity Relationships**: Both `(:Doc)-[:MENTIONS]->(:Entity)` and typed `(:Entity)-[:RELATION]->(:Entity)` relationships
+- **Namespace Support**: All entities properly namespaced for multi-tenant visualization
+- **Deduplication Metadata**: Canonical entities with aliases and confidence scores for enhanced rendering
+- **Entity Linking Results**: Connections between extracted entities and existing KG entities
+- **Content Hash Tracking**: Ability to identify recently updated vs stable content for visualization prioritization
+
+**Outputs to Enhanced Query Operations:**
+- **Traversal-Ready Graph**: Relationships enable graph traversal for finding related documents and entities
+- **Confidence Scoring**: Entity and relationship confidence metadata for result ranking
+- **Rich Metadata**: Document source paths, processing timestamps, and extraction metadata for debugging
+- **Canonical Entity Names**: Deduplicated entity names and aliases for improved search and matching
+
+The robust ingest pipeline established in Step 7 ensures that the graph contains high-quality, structured data ready for visualization and complex querying operations in subsequent steps.

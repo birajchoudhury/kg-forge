@@ -10,11 +10,13 @@
 ## ✨ Latest Updates (November 2025)
 
 🎉 **Full Production Release**: Complete end-to-end pipeline from HTML documents to interactive knowledge graph visualizations
-🧠 **AI-Powered Extraction**: Fully functional AWS Bedrock integration with robust error handling and retry logic  
-📊 **Real Neo4j Integration**: All query commands now return live data from your knowledge graph
+🧠 **Dual AI Extraction**: Choose between LLM-powered (AWS Bedrock) or spaCy+GLiNER+GLiREL lexical extraction pipelines
+🔄 **Smart Deduplication**: Advanced entity resolution using Splink probabilistic matching and Zingg ML-based clustering
+📊 **Real Neo4j Integration**: All query commands now return live data from your knowledge graph  
 🎨 **Interactive Visualizations**: Professional graph rendering with filtering, seeding, and exploration features
-🎯 **NEW: Ontology Visualization**: Interactive Cytoscape.js-powered ontology structure visualization with multiple layouts
-✅ **100% Test Coverage**: 277/277 tests passing - comprehensive validation of all functionality
+🎯 **Ontology Visualization**: Interactive Cytoscape.js-powered ontology structure visualization with multiple layouts
+⚙️ **Flexible Configuration**: YAML config files, environment variables, and CLI overrides with proper precedence
+✅ **100% Test Coverage**: Comprehensive validation of all functionality including backend selection and configuration
 
 ## Description
 
@@ -742,16 +744,6 @@ kg-forge render --namespace production --depth 3 --max-nodes 500 --out productio
 - [x] **CLI render command**: Complete interface with comprehensive options
 - [x] **Production features**: Node limits, connectivity preservation, styling
 - [x] **Complete test coverage**: 57/57 render tests passing (100% pass rate)
-
-### ✅ **Ontology Visualization (NEW!)** 🎉 **COMPLETED**
-- [x] **Interactive ontology structure visualization**: Cytoscape.js-powered visualization of entity types and relationships
-- [x] **Multiple layout algorithms**: Force-directed, hierarchical, circular, and grid layouts for different exploration needs
-- [x] **Theme support**: Light and dark themes for different viewing environments
-- [x] **Entity examples integration**: Include entity examples as additional nodes in the visualization
-- [x] **CLI render-ontology command**: Complete interface with layout, theme, and example options
-- [x] **Self-contained HTML output**: No external dependencies, works offline
-- [x] **Production features**: Rich tooltips, interactive controls, and professional styling
-- [x] **Complete test coverage**: 6/6 ontology visualization tests passing (100% pass rate)
 
 ### 📈 **Quality Assurance**
 - [x] **271 comprehensive tests** (100% pass rate across all features)

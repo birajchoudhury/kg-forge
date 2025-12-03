@@ -1,285 +1,439 @@
-# Step 6: LLM Integration & Entity Extraction
+# Step 6: LLM Integration & Dual Extraction Backends
 
 ## Overview
 
-Step 6 introduces a pluggable LLM-based extraction engine that builds prompts using curated documents (from Step 3) and entity definition templates (from Step 4), calls AWS Bedrock (or a generic LLM client abstraction), and parses the response into a structured `{"entities": [...]}` payload suitable for ingestion into the Knowledge Graph. This step provides the core extraction capability that will be orchestrated by the ingest pipeline in Step 7.
+Step 6 introduces a dual extraction architecture with pluggable backends that can extract entities and relations using either LLM-based approaches or NLP/ML pipelines. This step implements both the LLM extraction backend (using AWS Bedrock) and the spaCy lexical graph pipeline (using spaCy + GLiNER + GLiREL) behind a common `ExtractionBackend` interface. The extraction backends produce structured `LexicalGraph` objects containing mentions and relations that will be processed by deduplication and entity linking in subsequent steps.
 
-Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), orchestrate the full ingest pipeline over folders (that's Step 7), perform dedup/merge/pruning of entities, or handle visualization or rendering.
+Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), orchestrate the full ingest pipeline over folders (that's Step 7), perform deduplication/entity resolution (handled by separate DedupBackend), or handle visualization or rendering.
 
 ## Scope
 
 ### In Scope
 
-- Implement a **prompt builder** that:
-  - Takes curated document content (from Step 2's document model)
-  - Takes entity definitions and merged prompt template (from Step 3)
-  - Builds a final prompt string for the LLM extraction call
-- Implement an **LLM client abstraction**:
-  - Interface/protocol for "extract entities from text"
-  - One concrete implementation for AWS Bedrock using LlamaIndex client
-  - One local "fake LLM" implementation used in tests (no network calls)
-- Implement **response parser**:
-  - Parse LLM output (JSON or JSON-like) into a Python model `ExtractionResult` with `entities: list[ExtractedEntity]`
-  - Validate parsed results against expected schema
-- Implement **error handling & retry** rules as per architecture seeds:
-  - Log error if output cannot be parsed
-  - Retry once on failure
-  - Maintain a counter of consecutive failures and abort after >10
-  - Skip individual failing documents while continuing batch processing
-- Implement a **CLI command** to:
-  - Run the extraction pipeline on sample input
-  - Display the parsed result for inspection
-  - Support both real and fake LLM backends
+- Implement **ExtractionBackend interface**:
+  - Common protocol for both LLM and spaCy-based extraction
+  - Input: curated document content + ontology pack
+  - Output: structured `LexicalGraph` with mentions and relations
+- Implement **LLM Extraction Backend**:
+  - Prompt builder using entity definitions and templates
+  - AWS Bedrock client using LlamaIndex integration
+  - Parse LLM JSON responses into `LexicalMention` and `LexicalRelation` objects
+  - Error handling, retry logic, and consecutive failure tracking
+- Implement **spaCy Lexical Graph Backend**:
+  - spaCy pipeline for tokenization, sentences, and document structure
+  - GLiNER integration for named entity recognition with ontology-aligned labels
+  - GLiREL integration for relation extraction between entities
+  - Entity linking preparation and mention feature extraction
+- Implement **core data models**:
+  - `LexicalMention`: entity mentions with positions and features
+  - `LexicalRelation`: typed relations between mentions
+  - `LexicalGraph`: container for mentions, relations, and metadata
+- Implement **CLI commands** to:
+  - Test extraction backends independently with sample content
+  - Compare LLM vs spaCy extraction results side-by-side
+  - Support fake/mock backends for testing without external dependencies
 - Unit tests for:
-  - Prompt construction logic
-  - Response parsing and validation
-  - Error handling & retry mechanisms
-  - Fake LLM implementation
+  - Both extraction backends with mocked dependencies
+  - Data model validation and serialization
+  - Error handling and resilience patterns
+  - Backend comparison and feature extraction
 
 ### Out of Scope
 
-- Writing to Neo4j or creating `:Doc` / `:Entity` nodes (covered in Step 6)
-- Walking folder trees and orchestrating ingest over many files (that's Step 6)
-- Deduplication, merging, or pruning entities
-- Changes to the CLI foundation beyond what is needed for new subcommands
-- Changes to the ontology design or entity definition format (those are defined in Step 3)
+- Writing to Neo4j or creating `:Doc` / `:Entity` nodes (covered in Step 7)
+- Walking folder trees and orchestrating ingest over many files (that's Step 7)
+- Entity deduplication, resolution, or canonicalization (handled by separate DedupBackend)
+- Entity linking to existing KG entities (handled by EntityLinkerBackend)
 - Full ingest pipeline orchestration or batch processing workflows
+- Advanced NLP features beyond basic spaCy + GLiNER + GLiREL integration
+- Model training or fine-tuning for GLiNER/GLiREL components
 
-## Prompt & Extraction Schema
+## Core Data Models
 
-### Expected LLM Output Schema
+### LexicalMention
 
-The LLM must return a JSON object with the following structure:
+A single mention of an entity in curated text, produced by either extraction backend.
 
+```python
+@dataclass
+class LexicalMention:
+    id: str                    # Unique within document/batch
+    doc_id: str               # Links back to :Doc node
+    entity_type: str          # e.g., "Product", "Team", "Topic"
+    surface: str              # Exact text span
+    start_offset: int         # Character offset in curated text
+    end_offset: int           # Character offset in curated text
+    features: Dict[str, Any]  # Backend-specific features
+    
+    # Common features examples:
+    # - normalized_surface: normalized text
+    # - sentence_index: sentence position
+    # - surrounding_context: sentence text
+    # - confidence: extraction confidence (0.0-1.0)
+    # - backend_source: "llm" or "spacy"
+```
+
+### LexicalRelation
+
+A typed relation between two lexical mentions, produced by GLiREL or LLM inference.
+
+```python
+@dataclass
+class LexicalRelation:
+    id: str                 # Unique relation identifier
+    type: str              # e.g., "WORKS_ON", "USES", "PART_OF"
+    src_mention_id: str    # Source LexicalMention ID
+    dst_mention_id: str    # Destination LexicalMention ID
+    features: Dict[str, Any]  # Backend-specific metadata
+    
+    # Common features examples:
+    # - confidence: relation confidence score
+    # - pattern: extraction pattern or rule
+    # - sentence_index: where relation was found
+    # - backend_source: "llm" or "spacy"
+```
+
+### LexicalGraph
+
+The complete output from an extraction backend containing all mentions and relations.
+
+```python
+@dataclass
+class LexicalGraph:
+    mentions: List[LexicalMention]
+    relations: List[LexicalRelation]
+    metadata: Dict[str, Any]
+    
+    # Metadata examples:
+    # - backend_name: "llm" or "spacy"
+    # - model_version: model/library versions used
+    # - extraction_time: processing timestamp
+    # - runtime_stats: performance metrics
+```
+
+### ExtractionBackend Interface
+
+Common interface for both LLM and spaCy-based extraction:
+
+```python
+from typing import Protocol
+
+class ExtractionBackend(Protocol):
+    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
+        """
+        Extract mentions and relations from curated text.
+        
+        Args:
+            content: Curated document text
+            ontology: Entity definitions and templates
+            
+        Returns:
+            LexicalGraph with extracted mentions and relations
+        """
+        ...
+```
+
+## Extraction Backend Implementations
+
+### LLMExtractionBackend
+
+Uses AWS Bedrock via LlamaIndex to extract entities and relations through prompted generation.
+
+```python
+class LLMExtractionBackend:
+    def __init__(self, bedrock_client, model_name: str, max_tokens: int = 4000):
+        self.bedrock_client = bedrock_client
+        self.model_name = model_name
+        self.max_tokens = max_tokens
+        
+    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
+        """
+        Build prompt, call Bedrock, parse JSON response into LexicalGraph.
+        """
+        prompt = self._build_prompt(content, ontology)
+        raw_response = self._call_bedrock(prompt)
+        return self._parse_response(raw_response, content)
+        
+    def _build_prompt(self, content: str, ontology: OntologyPack) -> str:
+        """Combine entity definitions, templates, and document content."""
+        
+    def _parse_response(self, response: str, original_content: str) -> LexicalGraph:
+        """Parse LLM JSON into LexicalMention and LexicalRelation objects."""
+```
+
+**LLM Response Format:**
 ```json
 {
   "entities": [
     {
       "type": "Product",
       "name": "Knowledge Discovery",
+      "start": 45,
+      "end": 63,
       "confidence": 0.92
-    },
+    }
+  ],
+  "relations": [
     {
-      "type": "EngineeringTeam", 
-      "name": "Platform Engineering",
-      "confidence": 0.89
+      "type": "WORKS_ON",
+      "source": "Platform Engineering",
+      "target": "Knowledge Discovery",
+      "confidence": 0.85
     }
   ]
 }
 ```
 
-### Schema Validation Rules
+### SpacyLexicalBackend
 
-- `entities`: Required array, may be empty
-- Each entity object must contain:
-  - `type`: Required string that matches an `entity_type` ID from Step 3 definitions
-  - `name`: Required non-empty string
-  - `confidence`: Optional float between 0.0 and 1.0 (default: 1.0 if not provided)
-
-### Prompt Composition
-
-The prompt builder constructs the final prompt by combining:
-
-1. **High-level instructions**: Task description and output format requirements
-2. **Entity type definitions**: Merged content from Step 3's entity definition files
-3. **Document content**: Curated text from Step 2's document model
-4. **Formatting instructions**: JSON schema requirements and examples
-
-Example prompt structure:
-```
-You are an expert at extracting entities from technical documentation.
-
-Extract entities from the following text according to these definitions:
-
-{{ENTITY_TYPE_DEFINITIONS}}
-
-Document content:
-{{DOCUMENT_CONTENT}}
-
-Return valid JSON with entities found in the document:
-{"entities": [...]}
-```
-
-## LLM Client & Adapter APIs
-
-### Core Interfaces
-
-Define abstractions in `kg_forge/llm/client.py`:
+Uses spaCy + GLiNER + GLiREL for entity and relation extraction through NLP pipelines.
 
 ```python
-from typing import Protocol
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
-
-@dataclass
-class ExtractedEntity:
-    type: str
-    name: str
-    confidence: float = 1.0
-
-@dataclass 
-class ExtractionResult:
-    entities: list[ExtractedEntity]
-
-class LLMExtractor(Protocol):
-    def extract_entities(self, prompt: str) -> ExtractionResult:
-        """Extract entities from prompt, return structured result."""
-        ...
+class SpacyLexicalBackend:
+    def __init__(self, spacy_model: str, gliner_model: str, glirel_model: str):
+        self.nlp = spacy.load(spacy_model)
+        self.gliner = GLiNER.from_pretrained(gliner_model)
+        self.glirel = GLiREL.from_pretrained(glirel_model)
+        
+    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
+        """
+        Run spaCy pipeline, GLiNER NER, GLiREL relation extraction.
+        """
+        # Tokenize and sentence segment with spaCy
+        doc = self.nlp(content)
+        
+        # Extract entities with GLiNER using ontology labels
+        entity_types = [et.name for et in ontology.entity_types]
+        entities = self.gliner.predict_entities(content, entity_types)
+        
+        # Extract relations with GLiREL
+        relations = self.glirel.predict_relations(doc, entities)
+        
+        return self._build_lexical_graph(entities, relations, content)
+        
+    def _build_lexical_graph(self, entities, relations, content: str) -> LexicalGraph:
+        """Convert spaCy/GLiNER/GLiREL outputs to LexicalGraph format."""
 ```
 
-### Concrete Implementations
+### FakeExtractionBackend
 
-- **BedrockLLMExtractor**: 
-  - Uses LlamaIndex Bedrock client as configured in architecture seeds
-  - Takes model name, region, and credentials from Step 1 configuration
-  - Implements timeout and token limit handling
-  - Handles AWS-specific errors and retries
+Deterministic backend for testing that returns configurable responses without external dependencies.
 
-- **FakeLLMExtractor**: 
-  - Returns deterministic, configurable outputs for given inputs
-  - Loads canned responses from `tests/data/llm_responses/*.json`
-  - Supports injecting malformed responses for negative testing
-  - No network calls or external dependencies
+```python
+class FakeExtractionBackend:
+    def __init__(self, response_data: Dict[str, Any]):
+        self.response_data = response_data
+        
+    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
+        """Return pre-configured LexicalGraph for testing."""
+        # Load from tests/data/extraction_responses/*.json
+        # Support malformed data injection for negative testing
+```
 
 ### Configuration Integration
 
-The LLM client uses configuration from Step 1's settings system:
+Backends use configuration from Step 0's settings system:
 
 ```yaml
-aws:
-  access_key_id: ${AWS_ACCESS_KEY_ID}
-  secret_access_key: ${AWS_SECRET_ACCESS_KEY}
-  default_region: us-east-1
-  bedrock_model_name: anthropic.claude-3-haiku-20240307-v1:0
-  bedrock_max_tokens: 4000
-  bedrock_temperature: 0.1
+# Extraction backend settings
+extraction:
+  default_backend: llm  # llm|spacy
+  
+  llm:
+    model_name: anthropic.claude-3-haiku-20240307-v1:0
+    max_tokens: 4000
+    temperature: 0.1
+    
+  spacy:
+    model: en_core_web_sm
+    gliner_model: urchade/gliner_multi
+    glirel_model: jackboyla/glirel_beta
 ```
 
 ## Error Handling & Resilience
 
 ### Failure Classification
 
-The following are considered extraction failures:
+**LLM Backend Failures:**
 - HTTP/network errors from Bedrock API
-- Timeout exceptions
+- Timeout exceptions  
 - Invalid JSON responses that cannot be parsed
-- Valid JSON that doesn't match the expected schema
-- Empty or null responses from the LLM
+- Valid JSON that doesn't match expected schema
+- Empty or null responses from LLM
+
+**spaCy Backend Failures:**
+- Model loading failures (spaCy, GLiNER, GLiREL)
+- Memory/resource exhaustion during processing
+- Invalid input text that breaks tokenization
+- Entity type mismatches with ontology definitions
+- Relation extraction failures between entities
+
+**Common Failures:**
+- Malformed input content
+- Ontology pack loading errors
+- Configuration/credential issues
 
 ### Retry Logic
 
-- **Single failure**: Log warning, retry the exact same call once
-- **Parse failure**: Log the raw response for debugging, attempt retry
-- **Network failure**: Log error details, attempt retry after brief delay
+- **LLM failures**: Retry API calls once with exponential backoff
+- **spaCy failures**: Retry with fallback models or simplified processing
+- **Configuration failures**: No retry, immediate failure with clear error message
+- **Parse failures**: Log raw output for debugging, attempt retry once
 
 ### Consecutive Failure Handling
 
-- Maintain a global consecutive failure counter across all extraction calls
-- If more than 10 extraction calls in a row fail:
-  - Log critical error with failure details
-  - Raise `ExtractionAbortError` 
+- Maintain separate failure counters for each backend type
+- If more than 10 consecutive failures for any backend:
+  - Log critical error with backend-specific failure details
+  - Raise `ExtractionAbortError` with backend context
   - Calling process should exit with non-zero code
-- Reset counter to 0 on any successful extraction
+- Reset counter to 0 on any successful extraction from that backend
 
 ### Batch Processing Resilience
 
-For batch scenarios (used by Step 6):
+For batch scenarios (used by Step 7):
 - Single document failure causes that document to be skipped
-- Log document ID and error details
-- Continue processing remaining documents
-- Return partial results with failure summary
+- Log document ID, backend type, and error details
+- Continue processing remaining documents with same or different backend
+- Return partial results with backend-specific failure summary
+
+### Backend Failover
+
+- If LLM backend fails consistently, optionally fallover to spaCy backend
+- If spaCy backend fails consistently, optionally fallover to LLM backend  
+- Configuration controls failover behavior (enabled/disabled, thresholds)
 
 ### Logging Strategy
 
-- **INFO**: Successful extractions with entity counts
-- **WARNING**: Recoverable failures, retries, skipped documents
+- **INFO**: Successful extractions with mention/relation counts and backend type
+- **WARNING**: Recoverable failures, retries, skipped documents, backend switches
 - **ERROR**: Abort conditions, consecutive failure threshold reached
-- **DEBUG**: Raw prompts, responses, parsing details
+- **DEBUG**: Raw prompts/responses (LLM), model outputs (spaCy), parsing details
 
 Include correlation context:
 - Document ID or source identifier
+- Backend type (llm/spacy)
+- Extraction attempt number
 - Attempt number for retries
 - Failure count in current batch
 
 ## CLI Integration
 
-### New Command: `llm-test`
+### New Command: `extract-test`
 
-Add a new CLI subcommand for testing LLM extraction:
+Add a new CLI subcommand for testing extraction backends:
 
 ```bash
-kg-forge llm-test [OPTIONS] INPUT
+kg-forge extract-test [OPTIONS] INPUT
 ```
 
 #### Arguments and Options
 
 - `INPUT`: Path to text file containing curated document content
-- `--model TEXT`: Override Bedrock model name from config
-- `--fake-llm`: Use fake LLM instead of Bedrock (for testing)
-- `--output-format [json|text]`: Output format (default: text)
+- `--backend [llm|spacy|both]`: Extraction backend to use (default: both)
+- `--model TEXT`: Override Bedrock model name for LLM backend
+- `--fake-backends`: Use fake/mock backends for testing
+- `--output-format [json|text|comparison]`: Output format (default: comparison)
 - `--namespace TEXT`: Namespace for entity definitions (default: "default")
 - `--entities-dir PATH`: Override entity definitions directory
-- `--template-file PATH`: Override prompt template file
+- `--template-file PATH`: Override prompt template file (LLM only)
 
 #### Example Usage
 
 ```bash
-# Test with real Bedrock
-kg-forge llm-test sample_doc.txt --model anthropic.claude-3-sonnet
+# Compare both backends
+kg-forge extract-test sample_doc.txt
 
-# Test with fake LLM
-kg-forge llm-test sample_doc.txt --fake-llm
+# Test only LLM backend
+kg-forge extract-test sample_doc.txt --backend llm
+
+# Test only spaCy backend
+kg-forge extract-test sample_doc.txt --backend spacy
+
+# Use mock backends for testing
+kg-forge extract-test sample_doc.txt --fake-backends
 
 # JSON output for programmatic use
-kg-forge llm-test sample_doc.txt --fake-llm --output-format json
+kg-forge extract-test sample_doc.txt --backend llm --output-format json
 ```
 
 #### Command Behavior
 
-1. Load configuration from Step 1 settings
-2. Load entity definitions from Step 3 (respecting `--entities-dir`)
-3. Load and merge prompt template
-4. Read input text content
-5. Build extraction prompt
-6. Initialize LLM client (real or fake based on `--fake-llm`)
-7. Call extraction with error handling
-8. Parse and validate result
-9. Display entities in requested format
-10. Exit with code 0 on success, non-zero on failure
+1. Load configuration from Step 0 settings
+2. Load entity definitions from ontology pack (respecting `--entities-dir`)
+3. Read input text content
+4. Initialize requested extraction backend(s) (real or fake based on `--fake-backends`)
+5. Run extraction with error handling and timing
+6. Parse and validate results
+7. Display mentions and relations in requested format
+8. If `--backend both`, show side-by-side comparison with differences highlighted
+9. Exit with code 0 on success, non-zero on failure
 
-The command does NOT write to Neo4j and is purely for debugging and verification.
+The command does NOT write to Neo4j and is purely for debugging, verification, and backend comparison.
 
 ## Project Structure
 
 ```
 kg_forge/
+├── extraction/
+│   ├── __init__.py
+│   ├── interface.py       # ExtractionBackend protocol
+│   ├── llm_backend.py     # LLM-based extraction implementation
+│   ├── spacy_backend.py   # spaCy + GLiNER + GLiREL implementation
+│   ├── fake_backend.py    # Mock backend for testing
+│   └── exceptions.py      # Extraction-specific exceptions
+├── models/
+│   ├── __init__.py
+│   ├── lexical.py         # LexicalMention, LexicalRelation, LexicalGraph
+│   └── extraction.py      # Backend-specific data models
 ├── llm/
 │   ├── __init__.py
-│   ├── client.py          # LLMExtractor protocol and implementations
+│   ├── bedrock_client.py  # AWS Bedrock integration
 │   ├── prompt_builder.py  # Prompt construction logic
-│   ├── parser.py          # Response parsing and validation
-│   └── exceptions.py      # LLM-specific exception classes
+│   └── response_parser.py # LLM response parsing
+├── nlp/
+│   ├── __init__.py
+│   ├── spacy_pipeline.py  # spaCy integration and setup
+│   ├── gliner_wrapper.py  # GLiNER integration
+│   └── glirel_wrapper.py  # GLiREL integration  
 ├── cli/
-│   ├── llm_test.py        # CLI command implementation
-│   └── main.py           # Updated to include llm-test command
+│   ├── extract_test.py    # CLI command implementation
+│   └── main.py           # Updated to include extract-test command
 └── config/
-    └── settings.py       # Updated with AWS Bedrock configuration
+    └── settings.py       # Updated with extraction backend configuration
 
 tests/
+├── test_extraction/
+│   ├── __init__.py
+│   ├── test_llm_backend.py        # LLM extraction backend
+│   ├── test_spacy_backend.py      # spaCy extraction backend
+│   ├── test_fake_backend.py       # Mock backend testing
+│   └── test_interface.py          # Protocol compliance testing
+├── test_models/
+│   ├── __init__.py
+│   ├── test_lexical.py           # LexicalGraph data models
+│   └── test_serialization.py     # Data model serialization
 ├── test_llm/
 │   ├── __init__.py
-│   ├── test_client.py         # LLM client implementations
-│   ├── test_prompt_builder.py # Prompt construction
-│   ├── test_parser.py         # Response parsing
-│   ├── test_error_handling.py # Retry and failure logic
-│   └── test_fake_llm.py       # Fake LLM behavior
+│   ├── test_prompt_builder.py    # Prompt construction
+│   ├── test_response_parser.py   # Response parsing
+│   └── test_bedrock_client.py    # AWS Bedrock integration
+├── test_nlp/
+│   ├── __init__.py
+│   ├── test_spacy_pipeline.py    # spaCy integration
+│   ├── test_gliner_wrapper.py    # GLiNER integration
+│   └── test_glirel_wrapper.py    # GLiREL integration
 ├── test_cli/
-│   └── test_llm_test.py       # CLI command testing
+│   └── test_extract_test.py      # CLI command testing
 └── data/
-    └── llm_responses/
-        ├── valid_response.json      # Sample valid responses
-        ├── malformed_response.json  # Invalid JSON for testing
-        └── schema_invalid.json      # Valid JSON, invalid schema
+    ├── extraction_responses/
+    │   ├── llm_valid.json        # Valid LLM responses
+    │   ├── spacy_valid.json      # Valid spaCy outputs
+    │   ├── malformed.json        # Invalid responses for testing
+    │   └── comparison_cases.json # Side-by-side test cases
+    └── sample_documents/
+        ├── technical_doc.txt     # Sample extraction inputs
+        └── confluence_export.txt # Sample HTML-derived content
 ```
 
 ## Dependencies
@@ -413,35 +567,43 @@ logger.error("Consecutive failure threshold exceeded", extra={
 
 ### Unit Tests
 
-**Prompt Builder Tests** (`test_prompt_builder.py`):
-- Given fixed document content + entity definitions + template, assert prompt contains all required sections
-- Test template variable substitution works correctly
-- Test handling of missing or malformed entity definitions
-- Test prompt length and structure validation
+**LLM Backend Tests** (`test_llm_backend.py`):
+- Test prompt construction with entity definitions and templates
+- Mock Bedrock API calls and verify request parameters
+- Test response parsing into LexicalMention and LexicalRelation objects
+- Simulate API failures and verify retry/error handling behavior
+- Test consecutive failure tracking and abort conditions
 
-**Parser Tests** (`test_parser.py`):
-- Parse valid JSON responses into `ExtractionResult` objects
-- Handle missing optional fields (confidence defaults to 1.0)
-- Gracefully reject invalid JSON with appropriate error messages  
-- Validate entity type values against known types
-- Test edge cases: empty entities list, malformed entity objects
+**spaCy Backend Tests** (`test_spacy_backend.py`):
+- Mock spaCy, GLiNER, and GLiREL components with predictable outputs
+- Test entity type mapping from ontology to GLiNER labels
+- Verify LexicalMention creation with proper offsets and features
+- Test relation extraction and LexicalRelation object creation
+- Test error handling for model loading and processing failures
 
-**Error Handling Tests** (`test_error_handling.py`):
-- Simulate LLM failures and verify retry behavior (exactly once)
-- Test consecutive failure counter increments and reset logic
-- Verify abort behavior after >10 consecutive failures
-- Test individual document skip behavior in batch scenarios
+**Data Model Tests** (`test_lexical.py`):
+- Test LexicalMention, LexicalRelation, and LexicalGraph serialization
+- Validate required fields and data type constraints
+- Test conversion between internal models and Neo4j representations
+- Test feature dictionary handling and metadata preservation
 
-**Fake LLM Tests** (`test_fake_llm.py`):
-- Returns deterministic responses for known input prompts
-- Supports injecting malformed responses for negative testing
-- Configurable via test data files
-- No network calls or external dependencies
+**Backend Interface Tests** (`test_interface.py`):
+- Verify all backend implementations conform to ExtractionBackend protocol
+- Test backend factory/registry pattern for runtime selection
+- Validate error handling consistency across backends
+
+**Fake Backend Tests** (`test_fake_backend.py`):
+- Returns deterministic LexicalGraph objects for known inputs
+- Supports injecting malformed data for negative testing
+- Configurable via test data files in JSON format
+- No external dependencies (spaCy models, Bedrock API)
 
 ### Integration Tests
 
-**CLI Command Tests** (`test_llm_test.py`):
-- Test `kg-forge llm-test` against sample curated document
+**CLI Command Tests** (`test_extract_test.py`):
+- Test `kg-forge extract-test` with both backends against sample documents
+- Verify backend comparison output format and accuracy
+- Test --fake-backends flag for deterministic testing
 - Verify exit codes: 0 for success, non-zero for failures
 - Test both text and JSON output formats
 - Verify fake LLM mode works without network calls
@@ -450,29 +612,35 @@ logger.error("Consecutive failure threshold exceeded", extra={
 ### Test Data
 
 Create realistic test data in `tests/data/`:
-- `sample_document.txt`: Curated text from Confluence export
-- `llm_responses/valid_response.json`: Complete valid extraction result
-- `llm_responses/malformed.json`: Invalid JSON for error testing
-- `llm_responses/missing_fields.json`: Valid JSON with schema violations
+- `sample_documents/`: Curated text samples from Confluence exports
+- `extraction_responses/llm_valid.json`: Valid LLM extraction responses  
+- `extraction_responses/spacy_valid.json`: Valid spaCy backend outputs
+- `extraction_responses/malformed.json`: Invalid responses for error testing
+- `extraction_responses/comparison_cases.json`: Side-by-side test scenarios
 
 ### CI/CD Considerations
 
-- All tests use fake LLM by default - no real Bedrock calls required for CI
-- Optional integration tests with real Bedrock behind feature flag
-- Environment variable `KG_FORGE_ENABLE_BEDROCK_TESTS=1` enables real API tests
-- Coverage target: >90% for LLM module components
+- All tests use fake/mock backends by default - no real API calls or model downloads
+- Optional integration tests with real Bedrock/spaCy models behind feature flags
+- Environment variables control real backend testing:
+  - `KG_FORGE_ENABLE_BEDROCK_TESTS=1` enables real Bedrock API tests
+  - `KG_FORGE_ENABLE_SPACY_TESTS=1` enables real spaCy model tests
+- Coverage target: >90% for extraction module components
 
 ## Success Criteria
 
-Step 5 is considered complete when:
+Step 6 is considered complete when:
 
-- [ ] For a given curated document and entity definitions, the prompt builder produces a well-formed prompt containing all required sections
-- [ ] Given a valid sample Bedrock-style JSON response, the parser produces the correct `ExtractionResult` with proper entity objects
-- [ ] The retry logic behaves exactly as specified: retry once on failure, abort after >10 consecutive failures
-- [ ] The consecutive failure counter increments on errors and resets on success
-- [ ] `kg-forge llm-test --fake-llm sample.txt` runs end-to-end, exits with code 0, and prints parsed entities in human-readable format
-- [ ] `kg-forge llm-test --fake-llm --output-format json sample.txt` produces valid JSON output
-- [ ] No Neo4j writes occur anywhere in Step 5 implementations
+- [ ] **ExtractionBackend Interface**: Common protocol implemented by both LLM and spaCy backends
+- [ ] **LLM Backend**: Produces LexicalGraph with mentions and relations from Bedrock responses
+- [ ] **spaCy Backend**: Produces LexicalGraph using spaCy + GLiNER + GLiREL pipeline
+- [ ] **Data Models**: LexicalMention, LexicalRelation, and LexicalGraph models handle backend-specific features
+- [ ] **Error Handling**: Retry logic, consecutive failure tracking, and backend-specific error handling work correctly
+- [ ] **CLI Command**: `kg-forge extract-test --fake-backends sample.txt` runs end-to-end with both backends
+- [ ] **Backend Comparison**: `kg-forge extract-test sample.txt` shows side-by-side comparison of LLM vs spaCy results
+- [ ] **JSON Output**: All backends produce consistent LexicalGraph structures suitable for downstream processing
+- [ ] **No Graph Writes**: No Neo4j writes occur anywhere in Step 6 implementations
+- [ ] **Configurable Backends**: Backend selection works via configuration and CLI flags
 - [ ] All unit tests pass with >90% coverage for LLM modules
 - [ ] Integration tests demonstrate the fake LLM can substitute for real Bedrock during development
 - [ ] Error handling gracefully manages network failures, parse errors, and invalid responses

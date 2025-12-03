@@ -1,98 +1,230 @@
 """
-LLM prompt builder for entity extraction.
-"""
+Prompt builder for LLM extraction.
 
+Constructs prompts by merging entity definitions with templates.
+"""
 from pathlib import Path
-from typing import List, Optional
-from kg_forge.entities.definitions import EntityDefinitionLoader
-from kg_forge.ontology_manager import get_ontology_manager
+from typing import Dict, Any, List
+import logging
+
+from kg_forge.ontology.base import OntologyPack
+from kg_forge.entities.definitions import EntityDefinition
+
+logger = logging.getLogger(__name__)
 
 
 class PromptBuilder:
-    """Builds prompts for entity extraction from document content and entity definitions."""
+    """Builds extraction prompts from ontology and templates."""
     
-    def __init__(self, entity_loader: Optional[EntityDefinitionLoader] = None, ontology_id: Optional[str] = None):
-        """
-        Initialize prompt builder.
+    def __init__(self, ontology: OntologyPack):
+        """Initialize prompt builder with ontology pack.
         
         Args:
-            entity_loader: Legacy entity loader (for backward compatibility)
-            ontology_id: ID of ontology pack to use for prompts
+            ontology: Active ontology pack with entity definitions
         """
-        self.entity_loader = entity_loader
-        self.ontology_id = ontology_id
-        self.ontology_manager = get_ontology_manager()
+        self.ontology = ontology
     
-    def build_prompt(self, document_content: str, entities_dir: Path, 
-                    template_file: Path) -> str:
-        """
-        Build extraction prompt from document content and entity definitions.
+    def build_extraction_prompt(self, document_content: str, 
+                              prompt_template: str = None) -> str:
+        """Build complete extraction prompt for document.
         
         Args:
-            document_content: Curated text from Step 2 document model
-            entities_dir: Directory containing entity definition files
-            template_file: Prompt template file
-            
+            document_content: Curated text content to extract from
+            prompt_template: Optional custom prompt template
+        
         Returns:
             Complete prompt string ready for LLM
         """
-        # Load and merge entity definitions from Step 3
-        definitions = self.entity_loader.load_entity_definitions(entities_dir)
-        template_content = self.entity_loader.load_prompt_template(template_file)
-        merged_prompt = self.entity_loader.build_merged_prompt(template_content, definitions)
+        # Get the prompt template
+        if prompt_template is None:
+            prompt_template = self._get_default_template()
         
-        # Inject document content into the template
-        # Replace placeholder with actual document content
-        final_prompt = merged_prompt.replace('{{DOCUMENT_CONTENT}}', document_content)
+        # Build entity definitions section
+        entity_definitions_text = self._build_entity_definitions_section()
         
-        return final_prompt
+        # Replace placeholders in template
+        prompt = prompt_template.replace("{{ENTITY_TYPE_DEFINITIONS}}", entity_definitions_text)
+        prompt = prompt.replace("{{DOCUMENT_CONTENT}}", document_content)
+        
+        logger.debug(f"Built extraction prompt: {len(prompt)} characters", extra={
+            "definitions_count": len(self.ontology.get_entity_definitions()),
+            "document_length": len(document_content)
+        })
+        
+        return prompt
     
-    def build_prompt_with_definitions(
-        self, 
-        document_content: str, 
-        entity_definitions: List, 
-        template_file: Path
-    ) -> str:
-        """
-        Build complete prompt with pre-loaded entity definitions.
+    def _get_default_template(self) -> str:
+        """Get default extraction prompt template.
         
-        This is more efficient than build_prompt() when processing multiple documents
-        as it avoids reloading entity definitions for each document.
+        Returns:
+            Default template string with placeholders
+        """
+        return """You are an expert entity extraction system. Your task is to identify entities and relationships in technical documentation.
+
+Extract entities and relationships from the provided document according to the entity type definitions below.
+
+**INSTRUCTIONS:**
+1. Only extract entities that match the defined types
+2. Be precise with entity names - use the exact text from the document
+3. Include character offsets (start_offset, end_offset) for each mention
+4. For relationships, identify connections between entities based on the schema
+5. Return results in valid JSON format
+6. If no entities are found, return empty arrays
+
+**ENTITY TYPE DEFINITIONS:**
+
+{{ENTITY_TYPE_DEFINITIONS}}
+
+**DOCUMENT CONTENT:**
+
+{{DOCUMENT_CONTENT}}
+
+**OUTPUT FORMAT:**
+
+Return your results in this exact JSON format:
+
+{
+  "entities": [
+    {
+      "type": "EntityType",
+      "name": "Entity Name",
+      "start_offset": 123,
+      "end_offset": 135,
+      "confidence": 0.95,
+      "context": "surrounding text for context"
+    }
+  ],
+  "relations": [
+    {
+      "source_entity": "Entity Name 1",
+      "target_entity": "Entity Name 2",
+      "relation_type": "RELATION_TYPE",
+      "confidence": 0.9,
+      "context": "text showing the relationship"
+    }
+  ]
+}
+
+Begin extraction:"""
+    
+    def _build_entity_definitions_section(self) -> str:
+        """Build the entity definitions section of the prompt.
+        
+        Returns:
+            Formatted entity definitions text
+        """
+        definitions = self.ontology.get_entity_definitions()
+        
+        if not definitions:
+            return "No entity types defined."
+        
+        sections = []
+        
+        for definition in definitions:
+            section = self._format_entity_definition(definition)
+            sections.append(section)
+        
+        return "\n\n".join(sections)
+    
+    def _format_entity_definition(self, definition: EntityDefinition) -> str:
+        """Format a single entity definition for the prompt.
         
         Args:
-            document_content: The content to inject into template
-            entity_definitions: Pre-loaded entity definitions
-            template_file: Path to prompt template file
-            
+            definition: Entity definition to format
+        
         Returns:
-            Complete prompt string ready for LLM
+            Formatted definition text
         """
-        # Load template and merge with cached definitions
-        template_content = self.entity_loader.load_prompt_template(template_file)
-        merged_prompt = self.entity_loader.build_merged_prompt(template_content, entity_definitions)
+        lines = [f"## {definition.name or definition.entity_id}"]
         
-        # Inject document content into the template
-        final_prompt = merged_prompt.replace('{{DOCUMENT_CONTENT}}', document_content)
+        if definition.description:
+            lines.append(f"**Description:** {definition.description}")
         
-        return final_prompt
+        # Add relations if defined
+        if definition.relations:
+            lines.append("**Relationships:**")
+            for relation in definition.relations:
+                lines.append(f"- Can have {relation.to_label} relationship with {relation.target_type}")
+        
+        # Add examples if available
+        if definition.examples:
+            lines.append("**Examples:**")
+            for example in definition.examples:
+                if example.title:
+                    lines.append(f"- {example.title}")
+                    if example.description:
+                        lines.append(f"  {example.description}")
+        
+        return "\n".join(lines)
     
-    def build_ontology_prompt(self, document_content: str, ontology_id: Optional[str] = None) -> str:
-        """
-        Build extraction prompt using ontology pack.
+    def build_validation_prompt(self, extracted_data: Dict[str, Any]) -> str:
+        """Build a prompt to validate extracted data.
         
         Args:
-            document_content: Document content to analyze
-            ontology_id: Specific ontology pack ID, or use configured default
-            
+            extracted_data: Previously extracted entities and relations
+        
         Returns:
-            Complete prompt string ready for LLM
+            Validation prompt string
         """
-        target_ontology = ontology_id or self.ontology_id
+        return f"""Please validate the following extracted entities and relationships.
+
+Check for:
+1. Entity types match the defined ontology
+2. Relationship types are valid for the connected entity types  
+3. Entity names are precise and correctly extracted
+4. No duplicate entities or relationships
+
+EXTRACTED DATA:
+{extracted_data}
+
+ONTOLOGY DEFINITIONS:
+{self._build_entity_definitions_section()}
+
+Return validation results in JSON format:
+{{
+  "valid": true/false,
+  "errors": ["list of validation errors"],
+  "suggestions": ["list of improvement suggestions"]
+}}
+"""
+    
+    def get_available_entity_types(self) -> List[str]:
+        """Get list of available entity types from ontology.
         
-        # Build prompt using ontology manager
-        merged_prompt = self.ontology_manager.build_extraction_prompt(target_ontology)
+        Returns:
+            List of entity type identifiers
+        """
+        definitions = self.ontology.get_entity_definitions()
+        return [defn.entity_id for defn in definitions]
+    
+    def get_available_relation_types(self) -> List[str]:
+        """Get list of available relation types from ontology.
         
-        # Inject document content
-        final_prompt = merged_prompt.replace('{{DOCUMENT_CONTENT}}', document_content)
+        Returns:
+            List of relation type identifiers
+        """
+        relation_types = set()
+        definitions = self.ontology.get_entity_definitions()
         
-        return final_prompt
+        for definition in definitions:
+            if definition.relations:
+                for relation in definition.relations:
+                    relation_types.add(relation.to_label)
+        
+        return list(relation_types)
+    
+    def estimate_prompt_tokens(self, document_content: str) -> int:
+        """Estimate number of tokens in the complete prompt.
+        
+        Args:
+            document_content: Document content to include
+        
+        Returns:
+            Estimated token count (rough approximation)
+        """
+        prompt = self.build_extraction_prompt(document_content)
+        
+        # Rough approximation: 4 characters = 1 token
+        estimated_tokens = len(prompt) // 4
+        
+        return estimated_tokens

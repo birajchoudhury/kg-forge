@@ -3,8 +3,11 @@
 This document describes the **technical architecture** for a CLI tool that:
 
 - **ingests** unstructured content,
-- **extracts entities/topics** via an LLM or Knowledge Enrichment (KE) backend,
-- **populates a Neo4j-backed Knowledge Graph**,
+- **extracts entities/topics** via either:
+  - an **LLM-based pipeline**, or
+  - **spaCy + GLiNER + GLiREL lexical graph pipeline**,
+- runs **deduplication** on extracted entities using **Splink/Zingg**,
+- performs **entity linking** to an ontology-backed **Neo4j Knowledge Graph**,
 - **queries** entities and related chunks,
 - **renders** the graph for exploration.
 
@@ -23,8 +26,13 @@ The system is designed as an **experimental playground** to learn:
 A **Python CLI tool** with three primary subcommands:
 
 - `ingest`
-  - extract entities/topics from input content,
-  - populate/update a Knowledge Graph.
+  - curate content from HTML,
+  - **run one of two extraction pipelines** to form a lexical graph from the extracted entities and relations:
+    - **LLM-based**, or
+    - **spaCy + GLiNER + GLiREL** (lexical graph),
+  - run **deduplication** on the lexical/entity layer using Splink/Zingg,
+  - run **entity linking** against an ontology-backed KB,
+  - populate/update a Neo4j-based Knowledge Graph.
 - `query`
   - get entities associated with a chunk (Doc),
   - find related chunks via graph traversal.
@@ -45,11 +53,19 @@ For this project:
 - `ingest` source = **filesystem** with folders and HTML pages  
   (e.g. a **Confluence site HTML export**).
 
+The user can choose the extraction mode at runtime:
+
+--extractor [llm|spacy] (default llm)
+
 For the first step, we want **basic implementations** with minimal external dependencies:
 
 - curate text: simple HTML → curated text extraction,
-- extract entities: REST call to **Bedrock** (via LlamaIndex client) using a configurable prompt template,
-- auto-determine topics: same Bedrock call / prompt template.
+- extract entities and relationships between entities using either of the mentioned methods and build a **lexical graph**: 
+  - REST call to **Bedrock** (via LlamaIndex client) using a configurable prompt template, or 
+  - via **spaCy + GLiNER + GLiREL** ,
+- run **deduplication** on the lexical/entity layer using **Splink/Zingg**,
+- perform **entity linking** from deduped mentions to canonical entities (ontology),
+- populate/update the Neo4j Knowledge Graph.
 
 The primary focus areas:
 
@@ -59,10 +75,17 @@ The primary focus areas:
 
 In the long term, we may:
 
-- use a **KnowledgeEnrichment SaaS API** to run the full orchestrated pipeline,
+- use a **KnowledgeEnrichment SaaS API** to run the full orchestrated pipeline as another extraction backend,
 - use a **Content Lake** as the storage system.
 
-The architecture must therefore be **modular**, with clear boundaries so that backends (LLM vs KE API, filesystem vs Content Lake, etc.) can be swapped.
+The architecture must therefore be **modular**, with clear boundaries so that:
+
+- extraction backends (LLM vs spacy pipeline vs KE API),
+- deduplication backends (Splink vs Zingg vs none),
+- knowledge graph (Neo4j vs DGraph vs AWS Neptune)
+- and storage backends (filesystem vs Content Lake, etc.)
+
+ can be swapped independently.
 
 ---
 
@@ -80,17 +103,25 @@ The architecture must therefore be **modular**, with clear boundaries so that ba
   - Aim for good test coverage, especially around:
     - HTML curation,
     - entity-definition loading,
-    - LLM prompt & parsing logic,
+    - extraction backends (LLM + spacy pipeline) using fakes,
+    - deduplication integration (Splink/Zingg mocks),
     - graph schema operations.
 
 ### 2.2 Core Libraries
 
 - **CLI:** `click`
 - **Graph DB:** Neo4j (official Python driver)
-- **Graph Visualization:** `neovis.js` (via generated HTML)
+- **Graph Visualization:** `vis.js` (via generated HTML)
 - **LLM & KG Integration:** **LlamaIndex**
   - Use LlamaIndex **KnowledgeGraphIndex** plugged into Neo4j where helpful.
   - Use LlamaIndex **Bedrock client** for LLM calls.
+- **NLP / Lexical Graph Pipeline**:
+  - **spaCy** (tokenization, sentences, Doc/Span objects, KB & EntityLinker API),
+  - **GLiNER** for NER (via its Python API or spaCy wrapper),
+  - **GLiREL** for relation extraction.
+- **Deduplication/ Entity Resolution**:
+  - **Splink** (probabilistic, Python, good for tabular features),
+  - **Zingg** (ML-based ER at larger scale; may be optional/advanced).
 - **Environment Configuration:**
   - Use `.env` for configuration (e.g., via `python-dotenv` or similar).
 
@@ -101,7 +132,8 @@ Parameters such as:
 - Bedrock credentials (access keys / region),
 - Neo4j location & credentials,
 - Bedrock model name,
-
+- **Extractor mode** (llm or spacy),
+- **Dedup backend** (none, splink, zingg, both/ensemble),
 are provided via a `.env` file.
 
 - Provide `.env.example` as a template.
@@ -128,7 +160,12 @@ are provided via a `.env` file.
 3. **Ontology / Entity-Type Loading**
    - Load entity & topic definitions from `entities_extract/*.md` (see §4).
 
-4. **LLM / KE-based Extraction**
+4. **LLM / SpaCy Pipeline/ KE-based Extraction (Configurable)**
+  In v1, `--extractor` supports only `llm` and `spacy`. A `KE` (KnowledgeEnrichment SaaS)
+  backend is planned but not yet implemented.
+
+  Depending on --extractor:
+  - **LLM-based pipeline (llm)**
    - Build a prompt from:
      - `entities_extract/prompt_template.md`, and
      - concatenated entity-type definitions.
@@ -148,30 +185,180 @@ are provided via a `.env` file.
          }
        ]
      }
+   - Treat this as a **logical lexical graph** (mentions + optional relations).
 
-5. **Extensibility Hooks (Optional Transform & Cleanup)**
-   - `process_before_store(content, metadata, kg_client)`:
-     - last step before writing to the KG.
-   - `process_after_batch(entities, kg_client, interactive_session)`:
-     - batch cleanup / dedup / pruning after ingest completes.
+ - **spaCy lexical graph pipeline (spacy)**
+   - Run spacy → tokens, sentences (Doc).
+   - Run GLiNER → entity mentions (with ontology-aligned labels).
+   - Run GLiREL → relations between mentions.
+   - Build an explicit lexical graph representation:
+     - Mention nodes (with spans, types, features),
+     - Edges (relations/co-occurrence).
 
-6. **Graph Storage**
-   - Persist into Neo4j using a **simple property graph schema**:
-     - `:Doc` and `:Entity` nodes,
-     - `:MENTIONS` and typed `:RELATION` relationships,
-     - all scoped by `namespace`.
-   - Optionally expose this to LlamaIndex KnowledgeGraphIndex.
+5. **Deduplication (Splink/Zingg)**
+ - Convert extracted mentions/entities (from either pipeline) into feature tables per entity type.
+ - Run **entity resolution** using:
+ - Splink and/or Zingg (configurable),
+ - focusing on:
+    - misspellings,
+    - phonetic variants,
+    - abbreviations/synonyms,
+    - partial names, nicknames, etc.
+ - Produce:
+    - **mention clusters** (local duplicates within documents/corpus),
+    - **canonical entity candidate records** (one row per deduped entity).
 
-7. **Query & Render**
-   - `query` CLI:
+- The deduplicated structure is a **deduplicated lexical graph**:
+    - Nodes = canonical lexical entities (clusters),
+    - Edges = relations between those clusters.
+
+6. **Entity Linking (spaCy KB or custom linker)**
+ - Use a **KnowledgeBase** representation (spacy KB or equivalent) populated from the ontology and existing KG.
+ - For each canonical lexical entity (cluster), run a **linker** that:
+    - generates candidates from KB,
+    - scores them using:
+      - strings, identifiers, context relations from lexical graph,
+      - ontology constraints, and
+      - (optionally) Entity Resolution signals from Splink/Zingg.
+ - Decide:
+    - **link to existing KG entity**, or
+    - **Create a new canonical entity** in KG.
+
+7. **Extensibility Hooks (Optional Transform & Cleanup)**
+  - `process_before_store(content, deduped_graph, kg_client)`:
+    - called after deduplication and entity linking decisions, before KG write.
+  - `process_after_batch(created_entities, kg_client, interactive_session)`:
+    - batch cleanup / dedup / pruning after ingest completes.
+
+8. **Graph Storage (Neo4j)**
+
+ - Persist into Neo4j using a **simple property graph schema**:
+    - :Doc and :Entity nodes (canonical),
+    - :MENTIONS and typed :RELATION relationships between canonical entities,
+    - all scoped by namespace.
+ - The lexical graph itself may be:
+    - held in memory for scoring, or
+    - partially persisted (e.g., :Mention nodes) if we want full provenance.
+ - Optionally expose this to LlamaIndex KnowledgeGraphIndex.
+
+9. **Query & Render**
+  - `query` CLI:
      - list entity types, entities, docs, related docs.
-   - `render` CLI:
-     - export a subgraph to HTML & visualize with neovis.js.
+  - `render` CLI:
+     - export a subgraph to HTML & visualize with vis.js.
 
-8. **Experimentation & Iteration**
-   - Adjust entity definitions, prompts, hooks.
-   - Re-ingest with `--dry-run` or new `--namespace`.
+  - A future render-lexical variant could visualize a local lexical graph for debugging.
+
+10. **Experimentation & Iteration**
+
+  - Adjust entity definitions, prompts, hooks.
+  - Re-ingest with `--dry-run` or new `--namespace`.
+  - Compare extraction strategies:
+     --extractor llm vs --extractor spacy.
+  - Compare dedup strategies:
+  --dedup none/splink/zingg/both.
    - Observe impact in Neo4j & rendered graph.
+
+## 3.2 Extraction Pipelines as Backends
+
+
+We treat the extraction + lexical graph building as backends behind a common interface.
+A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
+
+Conceptually:
+
+```python
+class ExtractionBackend(Protocol):
+    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
+        """Produce a LexicalGraph (mentions + relations) from curated text."""```
+
+
+Implementations:
+
+- LLMExtractionBackend (existing)
+- SpacyLexicalBackend (new: spaCy + GLiNER + GLiREL)
+
+A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
+
+## 3.3 Core In-Memory Data Models
+
+These types are used by the extraction, deduplication, and linking steps. They are in-memory models; only some of their information is ultimately persisted to Neo4j.
+
+### 3.3.1 `LexicalMention`
+
+A single mention of an entity in curated text.
+
+- `id`: string (unique within a document or batch)
+- `doc_id`: string (links back to the `:Doc` node)
+- `entity_type`: string (e.g., `"Product"`, `"Team"`, `"Topic"`)
+- `surface`: string (exact text span)
+- `start_offset`: int (character offset in curated text)
+- `end_offset`: int (character offset in curated text)
+- `features`: dict  
+  Examples: normalized surface, token list, sentence index, surrounding sentence text, section, etc.
+
+### 3.3.2 `LexicalRelation`
+
+A relation between two lexical mentions, typically produced by GLiREL or inferred by the LLM.
+
+- `id`: string
+- `type`: string (e.g., `"WORKS_ON"`, `"USES"`, `"PART_OF"`)
+- `src_mention_id`: string (ID of source `LexicalMention`)
+- `dst_mention_id`: string (ID of destination `LexicalMention`)
+- `features`: dict  
+  Examples: confidence score, pattern that fired, sentence index, etc.
+
+### 3.3.3 `LexicalGraph`
+
+The lexical graph produced by an `ExtractionBackend`.
+
+- `mentions`: list of `LexicalMention`
+- `relations`: list of `LexicalRelation`
+- `metadata`: dict  
+  Examples: backend name (`"llm"`/`"spacy"`), model version, runtime stats.
+
+
+
+### 3.3.4 `CanonicalLexicalEntity`
+
+Represents a cluster of mentions that are believed to refer to the same real-world entity (output of deduplication).
+
+- `id`: string (stable within a namespace/batch)
+- `entity_type`: string (same space as `LexicalMention.entity_type`)
+- `canonical_name`: string (chosen surface form)
+- `aliases`: list of strings (all observed surface forms)
+- `mention_ids`: list of `LexicalMention.id` values in this cluster
+- `features`: dict  
+  Examples: aggregated Splink/Zingg scores, count of mentions, source docs.
+
+### 3.3.5 DedupedLexicalGraph
+
+Lexical graph after deduplication.
+
+- `canonical_entities`: list of `CanonicalLexicalEntity`
+- `relations`: list of `CanonicalRelation`
+- `metadata`: dict  
+  Examples: dedup backend used (`"splink"`/`"zingg"`/`"none"`), thresholds, timestamp.
+
+### 3.3.6 `LinkResult`
+
+The result of linking a canonical lexical entity to the Neo4j KG.
+
+- `canonical_entity_id`: string (ID of `CanonicalLexicalEntity`)
+- `existing_entity_id`: string or `null`  
+  Neo4j internal ID or business ID of an existing `:Entity`, if matched.
+- `new_entity_payload`: dict or `null`  
+  Properties to use when creating a new `:Entity` (if no existing entity matched).
+- `confidence`: float (0.0–1.0)
+- `explanation`: string (optional, for debugging / interactive review)
+
+### 3.3.7 `CanonicalRelation`
+
+- `id`: string
+- `type`: string
+- `src_entity_id`: string (CanonicalLexicalEntity.id)
+- `dst_entity_id`: string (CanonicalLexicalEntity.id)
+- `features`: dict (aggregated from underlying LexicalRelations)
 
 ---
 
@@ -202,6 +389,10 @@ For v1:
   - **Entities** are often explicitly named in text (e.g., product names, team names).
   - **Topics** may not appear verbatim and are usually inferred from context.
 - In the graph, both are stored as `:Entity` nodes; the distinction is via `entity_type` (e.g., `"Product"`, `"Topic"`).
+
+- An ontology pack is represented on disk as a folder like `entities_extract/` containing:
+  - one `.md` file per entity type,
+  - a `prompt_template.md` file.
 
 Typical entity types (not exhaustive):
 
@@ -335,31 +526,40 @@ This enables a virtuous loop:
 
 This round-trip is critical for the **“experiment, observe, refine”** workflow that this CLI is designed to support.
 
+### 4.6 OntologyPack
+
+An `OntologyPack` is an in-memory wrapper around the active ontology, backed on disk
+by a folder like `entities_extract/`. It contains:
+
+- the parsed entity-type definitions from `entities_extract/*.md`,
+- relation schema (allowed relations per type),
+- a reference to the active `prompt_template.md`,
+- convenience lookups by `entity_type` ID.
+
+All `ExtractionBackend` implementations treat `OntologyPack` as read-only configuration.
+
 ---
 
 ## 5. LLM Call & KE Abstraction
 
 ### 5.1 Abstraction Layer
 
-We define an **abstraction** responsible for:
+We reuse the `ExtractionBackend` abstraction introduced in §3.2. All concrete backends (LLM, spaCy pipeline, future KE SaaS) must:
 
-- Extracting **entities** and **topics** from curated content.
-- Being swappable between:
-  - the current LLM implementation (Bedrock via LlamaIndex client),
-  - a future **KnowledgeEnrichment SaaS API**.
+- accept curated document text and the active ontology, and
+- return a `LexicalGraph` (see §3.3) for that document.
 
-Conceptually:
+See ExtractionBackend definition in §3.2.
 
-class ExtractionBackend:
-    def extract(self, content: str, entity_type_definitions: str) -> dict:
-        """Returns a dict like {"entities": [...]} as per pipeline output spec."""
 
 ### 5.2 LlamaIndex + Bedrock (Initial Backend)
 
 - Use LlamaIndex **Bedrock client** to:
   - construct a prompt from `prompt_template.md` + concatenated entity definitions,
   - call the Bedrock model specified via configuration / --model flag,
-  - return JSON-like {"entities": [...]}.
+  - parse the raw model output into a `LexicalGraph`:
+      - build `LexicalMention`s for extracted entities,
+      - optionally infer `LexicalRelation`s if the prompt asks for relations.
 
 ### 5.3 Error Handling Strategy
 
@@ -395,17 +595,23 @@ To support experimentation and custom logic, we expose **hooks**.
 
 ### 6.2 process_before_store
 
-Called **after** LLM extraction and ontology parsing, **before** writing to the KG.
+Called  after extraction + dedup + linking and ontology parsing, **before** writing to the KG.
 
 Signature:
 
-def process_before_store(content: str, metadata: dict, kg_client) -> dict:
+def process_before_store(
+    content: str,
+    deduped_graph: DedupedLexicalGraph,
+    kg_client,
+) -> DedupedLexicalGraph:
     """
     content: curated text of the document
-    metadata: parsed JSON-like structure, e.g. {"entities": [...]}
+    deduped_graph: DedupedLexicalGraph produced by the selected DedupBackend
     kg_client: client to query/update the KG if needed
-    returns: modified metadata
+    returns: modified DedupedLexicalGraph
     """
+
+
 
 Use cases:
 
@@ -419,30 +625,21 @@ Called **at the end of an import batch**.
 
 Signature:
 
-def process_after_batch(entities: list[dict], kg_client, interactive_session) -> None:
+def process_after_batch(
+    created_entities: list[dict],
+    kg_client,
+    interactive_session
+) -> None:
     """
-    entities: list of entity records that were added to the graph
-    kg_client: client to query/update the KG
-    interactive_session: object able to ask questions to the user when interactive mode is enabled
+    created_entities: list of KG entity payloads (e.g. Neo4j :Entity properties)
+    interactive_session: optional handle for interactive use (e.g. to prompt a human reviewer
+in a REPL or notebook). In non-interactive runs it may be None.
+
     """
+
 
 Responsibilities:
-
 - Cleanup / prune the KG.
-- Experiment with **dedup/merging strategies**, e.g.:
-  - misspelled entities,
-  - similarly sounding entities (“Catherine J.” vs “Katherine Jones”),
-  - abbreviations (“Kubernetes” vs “K8S”),
-  - partial names (“James Earl Jones” vs “James Jones”).
-
-### 6.4 Interactive Mode (--interactive / --biraj)
-
-- Add --interactive (alias --biraj) flag to the ingest command.
-- In interactive mode:
-  - process_after_batch can use interactive_session to:
-    - ask questions on the command line,
-    - have a **human in the loop** to resolve ambiguous merges/dedup operations.
-
 ---
 
 ## 7. Knowledge Graph Schema & Storage
@@ -487,6 +684,12 @@ Required properties
 - name – string, canonical name (e.g. "Knowledge Discovery").
 - normalized_name – string, normalized name for matching.
 
+Optional properties
+
+- aliases – list of strings (all observed surface forms).
+- mention_count – int (aggregated number of lexical mentions).
+- dedup_features – map (backend-specific scores or cluster metadata).
+
 Normalization:
 
 - lowercase,
@@ -526,6 +729,12 @@ Required properties
 - namespace – string, same namespace as the connected nodes.
 
 Other properties (e.g. confidence) are optional and can be added later.
+
+For v1, we create one `(:Doc)-[:MENTIONS]->(:Entity)` edge per (doc_id, entity) pair,
+aggregating lexical-level signals into optional properties such as:
+- mention_count,
+- max_confidence,
+- first_seen_offset.
 
 #### 7.2.3 (:Entity)-[:<RELATION>]->(:Entity)
 
@@ -580,7 +789,9 @@ Responsibilities:
 
 - Read HTML files from a folder,
 - Curate text from HTML,
-- Run extraction (LLM/KE abstraction),
+- Run extraction via selected backend (llm or spacy; KE backend planned for later),
+- Run deduplication (if configured),
+- Run entity linking,
 - Call hooks (process_before_store, process_after_batch),
 - Write graph to Neo4j.
 
@@ -599,8 +810,11 @@ Options:
   - Override default entities_extract/prompt_template.md.
 - --model TEXT
   - Override default Bedrock model name from config.
-- --interactive / --biraj (flag)
-  - Enable interactive mode for process_after_batch.
+- --extractor [llm|spacy] (default llm)
+  - Selects extraction backend.
+- --dedup-backend [none|splink|zingg|both] (default splink)  
+      - In v1, `both` behaves like `splink`. A true ensemble mode will be added later.
+  - Controls dedup engine.
 
 Behaviour:
 
@@ -612,15 +826,16 @@ Behaviour:
   - If a :Doc already exists with same (namespace, doc_id, content_hash):
     - and --refresh is not provided → skip.
   - Otherwise:
-    - run the extraction pipeline (LLM backend),
-    - produce metadata {"entities": [...]},
+    - run the extraction pipeline (llm or spacy)
+    - produce a LexicalGraph (mentions + relations),
+    - Run DedupBackend (if not none) → DedupedLexicalGraph.
+    - Run EntityLinkerBackend → mapping of canonical lexical entities → KG entities.
     - call process_before_store,
-    - write Doc, Entity, MENTIONS, and domain relationships,
+    - Create/merge :Doc, :Entity, :MENTIONS, and :RELATION edges in Neo4j.
     - collect entities for batch summary.
 
 - After all docs:
-  - call process_after_batch with list of entities, kg_client, and interactive_session
-    (if --interactive / --biraj is set, interactive_session can ask user questions).
+  - call process_after_batch with list of entities, kg_client
 
 ### 8.3 query Command
 
@@ -654,7 +869,7 @@ Behaviour:
 
 For rendering, we:
 
-- generate an HTML page that uses neovis.js to display the graph.
+- generate an HTML page that uses vis.js to display the graph.
 
 Options:
 
@@ -727,7 +942,7 @@ Behaviour:
       - Confluence export boilerplate.
 
 - Output:
-  - curated text suitable as input to the LLM,
+  - curated text suitable as input to the extraction backends (LLM or spacy pipeline),
   - minimal noise.
 
 ### 9.2 Chunking
@@ -792,7 +1007,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 - Add a README.
 - No actual processing or LLM calls yet.
 
-### Step 1 – Ontology Management 🎉 **COMPLETED**
+### Step 1 – Ontology Management
 
 - Implement ontology pack system for organizing entity definitions:
   - Dynamic loading and activation of ontology packs.
@@ -801,7 +1016,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - Extensible architecture for custom ontology formats.
 - Add comprehensive test coverage and documentation.
 
-### Step 2 – Ontology Visualization 🎉 **COMPLETED**
+### Step 2 – Ontology Visualization
 
 - Implement ontology structure visualization using Cytoscape.js:
   - Interactive HTML generation showing entity types and relationships.
@@ -809,7 +1024,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - Theme support (light/dark) and entity examples integration.
   - CLI render-ontology command with comprehensive options.
 - Add comprehensive test coverage:
-  - 6 test functions covering all functionality.
+  - test functions covering all functionality.
   - HTML generation, layout options, theme support, and error handling.
 - Self-contained HTML output with no external dependencies.
 
@@ -844,28 +1059,157 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - using Docker-based Neo4j fixture in pytest.
   - implement initial CLI query behaviours (e.g. list-types).
 
-### Step 6 – Plug LLM
+### Step 6a – Plug Extraction through LLM backend 
 
-- Implement prompt generation from:
-  - curated text + merged prompt + entity definitions.
-- Implement parsing logic that:
-  - converts LLM output → {"entities": [...]}.
-- Generate test data:
-  - use fake LLM responses for tests.
-- Implement the actual Bedrock call via LlamaIndex client.
-- Add CLI command to:
-  - test model calling with sample data (e.g. test-llm).
+- Implement LLMExtractionBackend:
+   - build prompt from:
+       - curated text,
+       - merged prompt_template.md + entity definitions,
 
-### Step 7 – Ingest Pipeline
+   - call Bedrock via LlamaIndex client,
+   - parse model output into LexicalGraph:
+       - LexicalMentions with entity_type, surface, spans (if provided),
+       -  LexicalRelations.
+   - Implement parsing logic that:
+       - validates JSON shape,
+       - logs and skips malformed items,
+       - gracefully handles partial failures.
+   - Generate test data:
+       - fake LLM responses for unit tests (no real Bedrock),
+       - test edge-cases: empty entities, unknown types.
+   - Add CLI command to:
+       - test model calling with sample data (e.g. test-llm),
+       - print parsed LexicalGraph.
 
-- Implement full ingestion pipeline:
-  - read HTML → curate text → LLM extract → process_before_store → store in KG.
-- Implement --dry-run, --refresh, --namespace, and --interactive flags.
-- Implement process_after_batch invocation.
-- Add end-to-end tests:
-  - with fake LLM calls (no real Bedrock).
-  - verify Neo4j content matches expectations.
-- Refine query behaviour based on early usage.
+### Step 6b – Plug Extraction through  GLiNER + GLiREL Lexical Backend
+
+   - Implement SpacyLexicalBackend:
+      - load spacy model (nlp),
+      - load GLiNER model with ontology labels,
+      - load GLiREL model for relation extraction.
+   - Pipeline:
+      - run nlp on curated text to get tokens and sentences,
+      - run GLiNER to get entity spans and types,
+      - map GLiNER spans back to spacy spans,
+      - build LexicalMentions with context and features,
+      - run GLiREL on text + entity spans to get relations,
+      - build LexicalRelations,
+      - return LexicalGraph.
+    - Tests:
+      - use small fixtures with known entities/relations,
+      - verify LexicalGraph contains expected mentions and relations,
+      - ensure ontology labels are respected (no unknown types).
+   - Config:
+      - support model names/paths via .env or CLI flags.
+
+### Step 7a – Plug Dedup Backend using Splink and Zingg
+  Input: a `LexicalGraph` produced by Step 6 (LLM or spacy backend).  
+  Output: a `DedupedLexicalGraph` and a set of `CanonicalLexicalEntity` objects.
+
+   -   Implement DedupBackend interface and concrete implementations:
+      -   Splink DedupBackend for local / smaller-scale, Python-only workflows,
+      -   Zingg DedupBackend for larger / Spark-based or distributed environments. 
+   -   Feature engineering and data preparation:
+      -   transform LexicalGraph.mentions into per-entity-type tabular data (Pandas/Spark),
+      -   compute normalized names (lowercased, de-punctuated strings),
+      -   generate phonetic keys (e.g. Soundex/Metaphone) for name fields,
+      -   build character n-grams / token n-grams for fuzzy matching,
+      -   attach context features (e.g. co-occurring entities, document section),
+      -   include strong identifiers where available (email, ID, URL, etc.).      
+   -   Matching logic:
+      -   for Splink:
+          -   define comparison rules per field (exact, Jaro-Winkler, n-gram similarity, phonetic),
+          -   configure blocking rules for scalability (e.g. same initial, same domain),
+          -   train or configure match weights and thresholds for match / possible-match / non-match, 
+     -   for Zingg:
+          -   configure match/merge rules per entity type using its DSL or config, 
+          -   leverage ML-based classification for match vs non-match,
+          -   support active learning / label collection in later iterations. 
+     -   Cluster formation:
+          -   run the chosen backend(s) to produce clusters of mentions that likely refer to the same real-world entity,
+          -   assign a canonical ID for each cluster,
+          -   choose a canonical name (e.g. highest-quality or most frequent surface form),
+          -   collect all surface forms as aliases and merge feature dictionaries.
+      -   Build DedupedLexicalGraph:
+      -   construct CanonicalLexicalEntity objects for each cluster:
+          -   id, entity_type, canonical\_name, aliases, merged features,
+      -   aggregate LexicalRelations into CanonicalRelations using the mention→canonical mapping, so that DedupedLexicalGraph.relations is a list of CanonicalRelation.
+      -   ensure that singletons (no duplicates) still become canonical entities.
+        
+    -   Tests:
+      -   create small synthetic datasets with known duplicate patterns:
+        -   misspellings,
+        -   phonetic variants,
+        -   abbreviations,
+        -   partial names,
+      -   verify that obvious duplicates are clustered together,
+      -   verify that clearly distinct entities are not merged,
+      -   add regression tests for tricky borderline cases (e.g. “James Jones” vs “James Earl Jones”).
+      
+    -   Config:
+      -   support selecting backend via CLI / config:
+        -   \--dedup-backend \[none|splink|zingg|both\],   
+      -   read tuning parameters (thresholds, blocking rules, comparison fields) from a config file or .env,
+      -   allow per-entity-type overrides so different schemas can use different dedup strategies.
+
+### Step 7b – Entity Linking Backend
+
+    Input: `CanonicalLexicalEntity` instances and the `DedupedLexicalGraph` from Step 7a.  
+    Output: `LinkResult` objects consumed by the Neo4j write layer in Step 7c.
+
+    -   Implement `EntityLinkerBackend`:
+      -   interface and a concrete implementation (e.g. `DefaultEntityLinkerBackend`). 
+    -   Build or load a candidate KB from Neo4j:
+      -   index `:Entity` nodes by `(namespace, entity_type, normalized_name)`,
+      -   optionally pre-compute embeddings or extra features.
+    -   For each `CanonicalLexicalEntity`:
+      -   generate candidate entities from KB using:
+        -   exact/normalized name,  
+        -   phonetic variants,  
+        -   strong identifiers (emails, IDs) from features.
+      -   score candidates using:
+        -   string similarity,
+        -   context overlap / relation patterns,
+        -   ontology constraints (what relations are allowed).
+      -   decide:
+        -   link to an existing KG entity, or
+        -   create a new KG entity.
+    -   Return `LinkResult`s to the KG layer:
+      -   `existing_entity_id` vs `new_entity_payload`,
+      -   confidence scores and reasons (for debugging).
+  -   Tests:
+      -   local KB with a few entities,
+      -   verify linking behaviour for:
+          -   clear matches,  
+          -   clear non-matches, 
+          -   borderline cases.
+
+
+### Step 7c – Ingest Pipeline Wiring (Dual Pipelines + Dedup + Linking)
+
+    -   Implement full pipeline:
+      -   read HTML → curate text → load ontology
+      -   run **selected** `ExtractionBackend` → `LexicalGraph`
+      -   run **selected** `DedupBackend` → `DedupedLexicalGraph`
+      -   run `EntityLinkerBackend` → link decisions
+      - run `process_before_store` hook → possibly modified `DedupedLexicalGraph`
+      -   write to Neo4j:
+          -   `:Doc`,
+          -   `:Entity`,
+          -   `:MENTIONS`,
+          -   domain `:RELATION` edges
+      -   collect canonical entities for batch.
+    -   Implement flags:
+        -   `--dry-run` (no writes, just log pipeline output),
+        -   `--refresh` (skip unchanged docs by `content_hash`),
+        -   `--namespace`, 
+        -   `--extractor [llm|spacy]` (default `llm`),
+        -   `--dedup-backend [none|splink|zingg|both]` (default `splink`)
+    - Implement process_after_batch invocation.
+    -   Add end-to-end tests:
+        -   use fake extractors/dedup/linkers,
+        -   verify Neo4j content for both `llm` and `spacy` modes matches expectations.
+
 
 ### Step 8 – Graph Rendering
 
@@ -876,7 +1220,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - HTML is generated,
   - configuration options are respected.
 
-### Step 9 – Further Iterations
+### Further Iterations
 
 - Update this plan as we learn:
   - more granular LLM strategies,

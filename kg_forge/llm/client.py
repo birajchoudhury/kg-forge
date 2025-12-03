@@ -2,9 +2,12 @@
 Core LLM client interfaces and data models.
 """
 
+import logging
 from typing import Protocol
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ExtractedEntity:
@@ -63,8 +66,7 @@ class BaseLLMExtractor(ABC):
                 
                 # Log warning and continue to retry (if not last attempt)
                 if attempt == 0:
-                    # TODO: Add proper logging
-                    print(f"LLM extraction failed (attempt {attempt + 1}), retrying: {e}")
+                    logger.warning(f"LLM extraction failed (attempt {attempt + 1}), retrying: {e}")
                 else:
                     # Last attempt failed, re-raise
                     raise e
