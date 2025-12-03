@@ -8,14 +8,11 @@ import time
 from typing import Dict, Any, Optional
 import logging
 
-# We'll implement these imports when we add the dependencies
-try:
-    from llama_index.llms.bedrock import Bedrock
-    import boto3
-    from botocore.exceptions import ClientError, NoCredentialsError
-    BEDROCK_AVAILABLE = True
-except ImportError:
-    BEDROCK_AVAILABLE = False
+
+from llama_index.llms.bedrock import Bedrock
+import boto3
+from botocore.exceptions import ClientError, NoCredentialsError
+
 
 from kg_forge.extraction.exceptions import (
     BackendNotAvailableError, 
@@ -25,6 +22,16 @@ from kg_forge.extraction.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Check if Bedrock dependencies are available
+BEDROCK_AVAILABLE = False
+try:
+    from llama_index.llms.bedrock import Bedrock
+    import boto3
+    BEDROCK_AVAILABLE = True
+except ImportError as e:
+    print(f"Bedrock imports not available: {e}")
+    
 
 
 class BedrockClient:
@@ -45,10 +52,6 @@ class BedrockClient:
             temperature: Sampling temperature
             timeout: Request timeout in seconds
         """
-        if not BEDROCK_AVAILABLE:
-            raise BackendNotAvailableError(
-                "Bedrock dependencies not available. Install with: pip install llama-index-llms-bedrock boto3"
-            )
         
         self.model_name = model_name
         self.region = region
@@ -127,12 +130,23 @@ class BedrockClient:
             call_duration = end_time - start_time
             
             # Extract response text
-            response_text = response.text
+            response_text = response.text if response and hasattr(response, 'text') else ""
+            
+            # Debug logging for empty responses
+            if not response_text or not response_text.strip():
+                logger.error(f"Empty response from Bedrock", extra={
+                    "doc_id": doc_id,
+                    "response_obj": str(response),
+                    "response_type": type(response).__name__,
+                    "response_attrs": [attr for attr in dir(response) if not attr.startswith('_')],
+                    "call_duration": call_duration
+                })
             
             logger.info(f"Bedrock call completed", extra={
                 "doc_id": doc_id,
                 "response_length": len(response_text),
-                "call_duration": call_duration
+                "call_duration": call_duration,
+                "response_preview": response_text[:200] if response_text else "EMPTY"
             })
             
             return {

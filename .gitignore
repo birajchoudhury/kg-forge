@@ -102,3 +102,46 @@ docs/source/_autosummary/
 docker-data/
 neo4j-data/
 postgres-data/
+
+# Generated HTML visualization files
+*.html
+!test_data/*.html
+!test_docs/*.html
+
+# Demo and test scripts
+demo_deduplication.py
+simple_dedup_demo.py
+query_results.py
+
+# Additional virtual environments
+venv1/
+venv*/
+
+# Python egg-info directories (already covered but being explicit)
+*.egg-info/
+
+# Additional temporary and backup files
+test_sample.txt.bak
+
+# Real-world test directories that might contain sensitive data
+real_e2e_test/
+render/
+
+# Generated ontology visualization files
+ontology*.html
+graph.html
+test_*.html
+real_e2e_graph.html
+simple_test.html
+
+# Generated test directories with potentially sensitive data
+test_ingest/
+
+# Additional system and editor files
+*.orig
+.vscode/settings.json
+.history/
+
+# Local testing configurations
+local_config.yaml
+test_config.yaml

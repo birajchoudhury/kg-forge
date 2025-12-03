@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class ResponseParser:
     """Parses LLM responses into structured extraction results."""
     
-    def __init__(self, doc_id: str, strict_parsing: bool = True):
+    def __init__(self, doc_id: str, strict_parsing: bool = False):
         """Initialize response parser.
         
         Args:
@@ -86,7 +86,12 @@ class ResponseParser:
             
         except json.JSONDecodeError as e:
             error_msg = f"Invalid JSON in LLM response: {e}"
-            logger.error(error_msg, extra={"doc_id": self.doc_id, "response_preview": response_text[:200]})
+            logger.error(error_msg, extra={
+                "doc_id": self.doc_id, 
+                "response_length": len(response_text),
+                "response_preview": response_text[:500] if response_text else "EMPTY_RESPONSE",
+                "response_is_empty": not response_text.strip() if response_text else True
+            })
             raise ParseError(error_msg)
         
         except (KeyError, TypeError, ValueError) as e:
@@ -152,6 +157,16 @@ class ResponseParser:
                         return json.loads(json_candidate)
                     except json.JSONDecodeError:
                         continue
+        
+        # If all else fails, check if response is empty or very short
+        if not response_text or len(response_text.strip()) < 10:
+            logger.warning(f"Empty or very short LLM response", extra={
+                "doc_id": self.doc_id,
+                "response_length": len(response_text) if response_text else 0
+            })
+            if not self.strict_parsing:
+                # Return empty structure for empty responses in non-strict mode
+                return {"entities": [], "relations": []}
         
         # If all else fails, raise error
         raise json.JSONDecodeError("No valid JSON found in response", response_text, 0)
@@ -222,18 +237,32 @@ class ResponseParser:
         start_offset = entity_data.get("start_offset", 0)
         end_offset = entity_data.get("end_offset", len(entity_name))
         
-        # Validate offsets if we have original content
+        # Validate and correct offsets if we have original content
         if original_content and start_offset >= 0 and end_offset <= len(original_content):
             actual_text = original_content[start_offset:end_offset]
             if actual_text.strip() != entity_name.strip():
-                logger.warning(f"Offset mismatch for entity '{entity_name}': "
-                             f"expected '{entity_name}', got '{actual_text}'",
-                             extra={"doc_id": self.doc_id})
-                
-                # Try to find the actual offsets
+                # LLM-provided offsets are incorrect, find the correct ones
                 corrected_offsets = self._find_entity_offsets(entity_name, original_content)
                 if corrected_offsets:
                     start_offset, end_offset = corrected_offsets
+                    logger.debug(f"Corrected offsets for entity '{entity_name}': "
+                               f"{start_offset}-{end_offset}",
+                               extra={"doc_id": self.doc_id})
+                else:
+                    # Could not find entity in content - use safe defaults
+                    logger.warning(f"Could not locate entity '{entity_name}' in content", 
+                                 extra={"doc_id": self.doc_id})
+                    start_offset = 0
+                    end_offset = len(entity_name)
+        elif original_content:
+            # Invalid offset range, try to find correct offsets
+            corrected_offsets = self._find_entity_offsets(entity_name, original_content)
+            if corrected_offsets:
+                start_offset, end_offset = corrected_offsets
+            else:
+                # Use safe defaults
+                start_offset = 0  
+                end_offset = len(entity_name)
         
         # Build features
         features = {
@@ -261,7 +290,7 @@ class ResponseParser:
     
     def _find_entity_offsets(self, entity_name: str, 
                            content: str) -> Optional[Tuple[int, int]]:
-        """Find actual offsets of entity in content.
+        """Find actual offsets of entity in content using multiple strategies.
         
         Args:
             entity_name: Entity name to find
@@ -270,24 +299,38 @@ class ResponseParser:
         Returns:
             Tuple of (start_offset, end_offset) or None if not found
         """
-        # Try exact match first
+        import re
+        
+        # Strategy 1: Exact match
         start_idx = content.find(entity_name)
         if start_idx >= 0:
             return (start_idx, start_idx + len(entity_name))
         
-        # Try case-insensitive match
+        # Strategy 2: Case-insensitive exact match
         lower_content = content.lower()
         lower_name = entity_name.lower()
         start_idx = lower_content.find(lower_name)
         if start_idx >= 0:
             return (start_idx, start_idx + len(entity_name))
         
-        # Try fuzzy matching (simple word boundary search)
-        import re
+        # Strategy 3: Word boundary match (handles punctuation)
         pattern = r'\b' + re.escape(entity_name) + r'\b'
         match = re.search(pattern, content, re.IGNORECASE)
         if match:
             return (match.start(), match.end())
+        
+        # Strategy 4: Strip common markdown formatting
+        stripped_name = entity_name.strip('*_`[]() ')
+        if stripped_name != entity_name and len(stripped_name) > 2:
+            # Try again with stripped name
+            return self._find_entity_offsets(stripped_name, content)
+        
+        # Strategy 5: Try finding partial matches for multi-word entities
+        if ' ' in entity_name:
+            # Try finding the first word as a fallback
+            first_word = entity_name.split()[0]
+            if len(first_word) > 3:  # Only for meaningful words
+                return self._find_entity_offsets(first_word, content)
         
         return None
     

@@ -245,10 +245,12 @@ class IngestPipeline:
             except Exception as e:
                 raise ConnectionError(f"Neo4j connection failed: {e}")
         
-        # Load entity definitions
-        entities_dir = Path(self.config.app.entities_extract_dir)
-        if not entities_dir.exists():
-            raise FileNotFoundError(f"Entity definitions directory not found: {entities_dir}")
+        # Validate ontology pack is available
+        try:
+            self.ontology_manager.get_active_ontology()
+            logger.debug("Ontology pack validated successfully")
+        except Exception as e:
+            raise RuntimeError(f"Ontology pack validation failed: {e}")
     
     def _process_document(self, file_path: Path) -> None:
         """Process a single HTML document through the complete pipeline."""
@@ -496,7 +498,7 @@ class IngestPipeline:
                             if link_result:
                                 if link_result.action == 'link_existing' and link_result.linked_entity:
                                     # Use existing entity
-                                    entity_map[canonical_entity.id] = link_result.linked_entity.kg_id
+                                    entity_map[canonical_entity.id] = link_result.linked_entity.id
                                     entities_updated += 1
                                 elif link_result.action == 'create_new':
                                     # Create new entity

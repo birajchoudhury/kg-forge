@@ -9,6 +9,8 @@ Tests the complete KG Forge CLI workflow from command line:
 Run with: python -m unittest tests.test_cli_e2e -v
 """
 
+import os
+import sys
 import unittest
 import tempfile
 import shutil
@@ -108,7 +110,8 @@ database = "neo4j"
     
     def run_cli_command(self, cmd_args: list, expect_success: bool = True):
         """Run KG Forge CLI command and return result."""
-        cmd = ["python", "-m", "kg_forge.cli.main"] + cmd_args
+        # Use sys.executable to ensure we use the same Python interpreter
+        cmd = [sys.executable, "-m", "kg_forge.cli.main"] + cmd_args
         
         try:
             # Run from project root so CLI can find default ontology pack
@@ -117,7 +120,8 @@ database = "neo4j"
                 cwd=Path.cwd(),  # Use project root instead of test_dir
                 capture_output=True,
                 text=True,
-                timeout=30
+                timeout=30,
+                env=os.environ.copy()  # Inherit current environment
             )
             
             if expect_success and result.returncode != 0:

@@ -134,6 +134,27 @@ class LLMExtractionBackend(BaseExtractionBackend):
         
         start_time = time.time()
         
+        # Check if content is too short for meaningful extraction
+        content_words = len(content.split()) if content else 0
+        if content_words < 10:
+            logger.warning(f"Content too short for extraction", extra={
+                "doc_id": doc_id,
+                "content_length": len(content) if content else 0,
+                "word_count": content_words
+            })
+            # Return empty graph for very short content
+            return LexicalGraph(
+                mentions=[],
+                relations=[],
+                metadata={
+                    "backend": "llm",
+                    "model_name": self.model_name,
+                    "extraction_time": 0,
+                    "skip_reason": "content_too_short",
+                    "word_count": content_words
+                }
+            )
+        
         try:
             # Build extraction prompt
             prompt = self.prompt_builder.build_extraction_prompt(content)

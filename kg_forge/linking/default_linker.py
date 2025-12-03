@@ -73,7 +73,7 @@ class DefaultEntityLinker:
                 candidates = self._find_candidates(canonical_entity, namespace)
                 
                 # Score and rank candidates
-                scored_candidates = self._score_candidates(canonical_entity, candidates)
+                scored_candidates = self._score_candidates(canonical_entity, candidates, namespace)
                 
                 # Make linking decision
                 link_result = self._make_linking_decision(canonical_entity, scored_candidates)
@@ -144,23 +144,26 @@ class DefaultEntityLinker:
         AND e.entity_type = $entity_type 
         AND e.namespace = $namespace
         RETURN e.kg_id as kg_id, e.name as name, e.entity_type as entity_type,
-               e.namespace as namespace, e.description as description,
-               e.properties as properties
+               e.namespace as namespace
         """
         
         try:
             results = self.neo4j_client.execute_query(
                 query,
-                name=canonical_entity.canonical_name,
-                entity_type=canonical_entity.entity_type,
-                namespace=namespace
+                parameters={
+                    "name": canonical_entity.canonical_name,
+                    "entity_type": canonical_entity.entity_type,
+                    "namespace": namespace
+                }
             )
             
             candidates = []
             for record in results:
                 candidate = KGCandidate(
-                    entity_id=record["kg_id"],
+                    kg_id=record["kg_id"],
                     name=record["name"],
+                    entity_type=record["entity_type"],
+                    namespace=record["namespace"],
                     score=1.0,  # Exact match
                     match_reason="exact_name_match"
                 )
@@ -182,17 +185,18 @@ class DefaultEntityLinker:
         AND e.namespace = $namespace
         AND e.name <> $name
         RETURN e.kg_id as kg_id, e.name as name, e.entity_type as entity_type,
-               e.namespace as namespace, e.description as description,
-               e.properties as properties
+               e.namespace as namespace
         LIMIT 20
         """
         
         try:
             results = self.neo4j_client.execute_query(
                 query,
-                entity_type=canonical_entity.entity_type,
-                namespace=namespace,
-                name=canonical_entity.canonical_name
+                parameters={
+                    "entity_type": canonical_entity.entity_type,
+                    "namespace": namespace,
+                    "name": canonical_entity.canonical_name
+                }
             )
             
             candidates = []
@@ -209,9 +213,8 @@ class DefaultEntityLinker:
                         name=record["name"],
                         entity_type=record["entity_type"],
                         namespace=record["namespace"],
-                        description=record.get("description"),
-                        properties=record.get("properties", {}),
-                        similarity_score=similarity
+                        score=similarity,
+                        match_reason="type_similarity_match"
                     )
                     candidates.append(candidate)
             
@@ -236,17 +239,18 @@ class DefaultEntityLinker:
         AND e.namespace = $namespace
         AND e.name <> $name
         RETURN e.kg_id as kg_id, e.name as name, e.entity_type as entity_type,
-               e.namespace as namespace, e.description as description,
-               e.properties as properties
+               e.namespace as namespace
         LIMIT 10
         """
         
         try:
             results = self.neo4j_client.execute_query(
                 query,
-                compatible_types=compatible_types,
-                namespace=namespace,
-                name=canonical_entity.canonical_name
+                parameters={
+                    "compatible_types": compatible_types,
+                    "namespace": namespace,
+                    "name": canonical_entity.canonical_name
+                }
             )
             
             candidates = []
@@ -262,9 +266,8 @@ class DefaultEntityLinker:
                         name=record["name"],
                         entity_type=record["entity_type"],
                         namespace=record["namespace"],
-                        description=record.get("description"),
-                        properties=record.get("properties", {}),
-                        similarity_score=similarity
+                        score=similarity,
+                        match_reason="type_compatible_match"
                     )
                     candidates.append(candidate)
             
@@ -337,7 +340,7 @@ class DefaultEntityLinker:
         return unique_candidates
     
     def _score_candidates(self, canonical_entity: CanonicalLexicalEntity,
-                         candidates: List[KGCandidate]) -> List[Tuple[KGCandidate, float]]:
+                         candidates: List[KGCandidate], namespace: str) -> List[Tuple[KGCandidate, float]]:
         """
         Score and rank candidates for the canonical entity.
         
@@ -347,7 +350,7 @@ class DefaultEntityLinker:
         scored_candidates = []
         
         for candidate in candidates:
-            confidence = self._calculate_confidence(canonical_entity, candidate)
+            confidence = self._calculate_confidence(canonical_entity, candidate, namespace)
             scored_candidates.append((candidate, confidence))
         
         # Sort by confidence descending
@@ -356,7 +359,7 @@ class DefaultEntityLinker:
         return scored_candidates
     
     def _calculate_confidence(self, canonical_entity: CanonicalLexicalEntity,
-                             candidate: KGCandidate) -> float:
+                             candidate: KGCandidate, namespace: str) -> float:
         """
         Calculate confidence score for a candidate match.
         
@@ -377,7 +380,7 @@ class DefaultEntityLinker:
         confidence += 0.3 * type_score
         
         # Namespace match (20% weight)
-        namespace_score = 1.0 if canonical_entity.namespace == candidate.namespace else 0.8
+        namespace_score = 1.0 if namespace == candidate.namespace else 0.8
         confidence += 0.2 * namespace_score
         
         # Mention frequency boost (10% weight)
@@ -415,12 +418,11 @@ class DefaultEntityLinker:
         if best_confidence >= self.similarity_threshold:
             # Link to best candidate
             linked_entity = KGEntity(
-                kg_id=best_candidate.kg_id,
+                id=best_candidate.kg_id,
                 name=best_candidate.name,
-                entity_type=best_candidate.entity_type,
-                namespace=best_candidate.namespace,
-                description=best_candidate.description,
-                properties=best_candidate.properties
+                normalized_name=best_candidate.name.lower().replace(' ', '_'),
+                aliases=[best_candidate.name],
+                confidence=best_candidate.score
             )
             
             return LinkResult(

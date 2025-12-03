@@ -36,16 +36,22 @@ def entities():
     help='Output format'
 )
 def list_types(entities_dir: Optional[Path], output_format: str):
-    """List all available entity types from definitions directory."""
-    if not entities_dir:
-        settings = get_settings()
-        entities_dir = Path(settings.app.entities_extract_dir)
+    """List all available entity types."""
     
-    logger.debug(f"Listing entity types from {entities_dir}")
+    logger.debug(f"Listing entity types from {'directory' if entities_dir else 'active ontology'}")
     
     try:
-        loader = EntityDefinitionLoader()
-        definitions = loader.load_entity_definitions(entities_dir)
+        if entities_dir:
+            # Use legacy file-based loading when directory is specified
+            from kg_forge.entities.definitions import EntityDefinitionLoader
+            loader = EntityDefinitionLoader()
+            definitions = loader.load_entity_definitions(entities_dir)
+        else:
+            # Use ontology pack when no directory specified
+            from kg_forge.ontology_manager import get_ontology_manager
+            ontology_manager = get_ontology_manager()
+            active_ontology = ontology_manager.get_active_ontology()
+            definitions = active_ontology.get_entity_definitions()
         
         if not definitions:
             console.print("[yellow]No entity definitions found[/yellow]")
@@ -105,17 +111,23 @@ def list_types(entities_dir: Optional[Path], output_format: str):
     help='Output format'
 )
 def show_type(entity_id: str, entities_dir: Optional[Path], output_format: str):
-    """Show detailed information for a specific entity type."""
-    if not entities_dir:
-        settings = get_settings()
-        entities_dir = Path(settings.app.entities_extract_dir)
+    """Show detailed information about a specific entity type."""
     
-    logger.debug(f"Showing entity type {entity_id} from {entities_dir}")
+    logger.debug(f"Loading entity type '{entity_id}' from {'directory' if entities_dir else 'active ontology'}")
     
     try:
-        loader = EntityDefinitionLoader()
-        definitions = loader.load_entity_definitions(entities_dir)
-        
+        if entities_dir:
+            # Use legacy file-based loading when directory is specified
+            from kg_forge.entities.definitions import EntityDefinitionLoader
+            loader = EntityDefinitionLoader()
+            definitions = loader.load_entity_definitions(entities_dir)
+        else:
+            # Use ontology pack when no directory specified
+            from kg_forge.ontology_manager import get_ontology_manager
+            ontology_manager = get_ontology_manager()
+            active_ontology = ontology_manager.get_active_ontology()
+            definitions = active_ontology.get_entity_definitions()
+            
         # Find matching definition
         definition = next((d for d in definitions if d.id == entity_id), None)
         
@@ -164,36 +176,44 @@ def show_type(entity_id: str, entities_dir: Optional[Path], output_format: str):
 )
 def build_prompt(entities_dir: Optional[Path], template_file: Optional[Path], output: Optional[Path]):
     """Build complete prompt by merging template with entity definitions."""
-    if not entities_dir:
-        settings = get_settings()
-        entities_dir = Path(settings.app.entities_extract_dir)
     
-    if not template_file:
-        template_file = entities_dir / "prompt_template.md"
-    
-    logger.debug(f"Building prompt from template {template_file} and entities in {entities_dir}")
+    logger.debug(f"Building prompt from {'directory' if entities_dir else 'active ontology'}")
     
     try:
-        loader = EntityDefinitionLoader()
-        
-        # Load template
-        template_content = loader.load_prompt_template(template_file)
-        
-        # Load entity definitions
-        definitions = loader.load_entity_definitions(entities_dir)
+        if entities_dir:
+            # Use legacy file-based loading when directory is specified
+            from kg_forge.entities.definitions import EntityDefinitionLoader
+            loader = EntityDefinitionLoader()
+            
+            if not template_file:
+                template_file = entities_dir / "prompt_template.md"
+            
+            # Load template
+            template_content = loader.load_prompt_template(template_file)
+            # Load entity definitions
+            definitions = loader.load_entity_definitions(entities_dir)
+        else:
+            # Use ontology pack when no directory specified
+            from kg_forge.ontology_manager import get_ontology_manager
+            ontology_manager = get_ontology_manager()
+            active_ontology = ontology_manager.get_active_ontology()
+            definitions = active_ontology.get_entity_definitions()
+            # Get template from ontology pack
+            template_content = active_ontology.get_prompt_template()
         
         if not definitions:
             console.print("[yellow]Warning: No entity definitions found[/yellow]")
         
         # Build merged prompt
+        from kg_forge.entities.definitions import EntityDefinitionLoader
+        loader = EntityDefinitionLoader()
         merged_prompt = loader.build_merged_prompt(template_content, definitions)
         
         # Output result
         if output:
             output.write_text(merged_prompt, encoding='utf-8')
             console.print(f"[green]Merged prompt written to[/green] {output}")
-            console.print(f"[dim]Template:[/dim] {template_file}")
-            console.print(f"[dim]Entity definitions:[/dim] {len(definitions)} types from {entities_dir}")
+            console.print(f"[dim]Entity definitions:[/dim] {len(definitions)} types from ontology")
         else:
             console.print(merged_prompt)
             
@@ -215,56 +235,75 @@ def build_prompt(entities_dir: Optional[Path], template_file: Optional[Path], ou
     help='Output format'
 )
 def validate(entities_dir: Optional[Path], output_format: str):
-    """Validate entity definition files for parsing errors and consistency."""
-    if not entities_dir:
-        settings = get_settings()
-        entities_dir = Path(settings.app.entities_extract_dir)
+    """Validate entity definitions."""
     
-    logger.debug(f"Validating entity definitions in {entities_dir}")
+    logger.debug(f"Validating entity definitions from {'directory' if entities_dir else 'active ontology'}")
     
     try:
-        loader = EntityDefinitionLoader()
-        
-        # Get all markdown files
-        md_files = sorted(entities_dir.glob("*.md"))
-        entity_files = [f for f in md_files if f.name != "prompt_template.md"]
-        
         validation_results = []
         
-        for file_path in entity_files:
-            result = {
-                "file": file_path.name,
-                "status": "valid",
-                "issues": []
-            }
+        if entities_dir:
+            # Use legacy file-based validation when directory is specified
+            from kg_forge.entities.definitions import EntityDefinitionLoader
+            loader = EntityDefinitionLoader()
             
-            try:
-                definition = loader.load_single_definition(file_path)
+            # Get all markdown files
+            md_files = sorted(entities_dir.glob("*.md"))
+            entity_files = [f for f in md_files if f.name != "prompt_template.md"]
+            
+            for file_path in entity_files:
+                result = {
+                    "file": file_path.name,
+                    "status": "valid",
+                    "issues": []
+                }
                 
-                # Validation checks
+                try:
+                    definition = loader.load_single_definition(file_path)
+                    
+                    # Validation checks
+                    if not definition.id:
+                        result["issues"].append("Missing entity ID")
+                    if not definition.name:
+                        result["issues"].append("Missing name")
+                    if not definition.description:
+                        result["issues"].append("Missing description")
+                    
+                    if result["issues"]:
+                        result["status"] = "warnings"
+                        
+                except Exception as e:
+                    result["status"] = "error"
+                    result["issues"].append(f"Parse error: {str(e)}")
+                
+                validation_results.append(result)
+                
+        else:
+            # Use ontology pack validation when no directory specified
+            from kg_forge.ontology_manager import get_ontology_manager
+            ontology_manager = get_ontology_manager()
+            active_ontology = ontology_manager.get_active_ontology()
+            definitions = active_ontology.get_entity_definitions()
+            
+            for definition in definitions:
+                result = {
+                    "entity_id": definition.id,
+                    "status": "valid", 
+                    "issues": []
+                }
+                
+                # Basic validation checks
                 if not definition.id:
                     result["issues"].append("Missing entity ID")
                 if not definition.name:
                     result["issues"].append("Missing name")
                 if not definition.description:
                     result["issues"].append("Missing description")
-                if not definition.relations:
-                    result["issues"].append("No relations defined")
-                if not definition.examples:
-                    result["issues"].append("No examples provided")
-                
-                # Check for common formatting issues
-                if definition.raw_markdown and "{{" in definition.raw_markdown:
-                    result["issues"].append("Contains template placeholders")
                 
                 if result["issues"]:
                     result["status"] = "warnings"
-                    
-            except Exception as e:
-                result["status"] = "error"
-                result["issues"].append(f"Parse error: {str(e)}")
-            
-            validation_results.append(result)
+                
+                validation_results.append(result)
         
         # Output results
         if output_format == 'json':
@@ -330,7 +369,15 @@ def _display_entity_definition_rich(definition):
 def _display_validation_results_rich(results):
     """Display validation results using Rich formatting."""
     table = Table(title="Entity Definition Validation Results")
-    table.add_column("File", style="cyan")
+    
+    # Check if we have file-based or entity-based results
+    has_files = any("file" in result for result in results)
+    
+    if has_files:
+        table.add_column("File", style="cyan")
+    else:
+        table.add_column("Entity ID", style="cyan")
+        
     table.add_column("Status", justify="center")
     table.add_column("Issues")
     
@@ -356,14 +403,17 @@ def _display_validation_results_rich(results):
         if result["issues"]:
             issues_display = "\n".join(f"• {issue}" for issue in result["issues"])
         
-        table.add_row(result["file"], status_display, issues_display or "[dim]None[/dim]")
+        # Use file or entity_id as identifier
+        identifier = result.get("file", result.get("entity_id", "unknown"))
+        table.add_row(identifier, status_display, issues_display or "[dim]None[/dim]")
     
     console.print(table)
     
     # Summary
-    total_files = len(results)
+    total_items = len(results)
+    item_type = "files" if has_files else "entities"
     console.print(f"\n[dim]Validation Summary:[/dim]")
-    console.print(f"  Total files: {total_files}")
+    console.print(f"  Total {item_type}: {total_items}")
     console.print(f"  [green]Valid: {valid_count}[/green]")
     console.print(f"  [yellow]Warnings: {warning_count}[/yellow]") 
     console.print(f"  [red]Errors: {error_count}[/red]")

@@ -292,17 +292,25 @@ class KGCandidate:
     Represents a potential match between a canonical entity
     and an existing KG entity with similarity scoring.
     """
-    entity_id: str            # Neo4j entity identifier
+    kg_id: str                # Neo4j entity identifier (renamed from entity_id)
     name: str                 # Entity name
-    score: float              # Similarity/match score (0.0-1.0)
-    match_reason: str         # Explanation of why this is a candidate
+    entity_type: str          # Entity type
+    namespace: str            # Entity namespace
+    description: Optional[str] = None  # Entity description (may be None)
+    properties: Optional[Dict] = None  # Entity properties (may be None)
+    score: float = 1.0        # Similarity/match score (0.0-1.0)
+    match_reason: str = "unknown"  # Explanation of why this is a candidate
     
     def __post_init__(self):
         """Validate KG candidate properties."""
-        if not self.entity_id:
-            raise ValueError("KGCandidate.entity_id cannot be empty")
+        if not self.kg_id:
+            raise ValueError("KGCandidate.kg_id cannot be empty")
         if not self.name:
             raise ValueError("KGCandidate.name cannot be empty")
+        if not self.entity_type:
+            raise ValueError("KGCandidate.entity_type cannot be empty")
+        if not self.namespace:
+            raise ValueError("KGCandidate.namespace cannot be empty")
         if self.score < 0.0 or self.score > 1.0:
             raise ValueError("KGCandidate.score must be between 0.0 and 1.0")
         if not self.match_reason:
