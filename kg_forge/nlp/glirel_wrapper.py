@@ -93,26 +93,28 @@ class GLiRELWrapper:
                 "text_length": len(text),
                 "entities_count": len(entities),
                 "relation_types": relation_types,
+                "relation_types_type": str(type(relation_types)),
                 "threshold": self.threshold
             })
             
-            # Convert entities to GLiREL format
+            # Debug: Check each relation type
+            for i, rel_type in enumerate(relation_types):
+                logger.debug(f"Relation type {i}: '{rel_type}' (type: {type(rel_type)})")
+            
+            # Convert entities to GLiREL format - expects tuples (start, end, label)
             glirel_entities = []
-            for i, entity in enumerate(entities):
-                glirel_entity = {
-                    "text": entity["text"],
-                    "span": (entity["start"], entity["end"]),
-                    "label": entity["label"],
-                    "id": i  # Add ID for relation linking
-                }
+            for entity in entities:
+                glirel_entity = (entity["start"], entity["end"], entity["label"])
                 glirel_entities.append(glirel_entity)
             
             # Run GLiREL prediction
+            # Based on API signature: predict_relations(text, labels, flat_ner=True, threshold=0.5, ner=None, ...)
+            # We need to pass relation_types as labels and entities as ner parameter
             relations = self.model.predict_relations(
                 text, 
-                glirel_entities, 
-                relation_types, 
-                threshold=self.threshold
+                relation_types,
+                threshold=self.threshold,
+                ner=glirel_entities
             )
             
             # Convert results to our format

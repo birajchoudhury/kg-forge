@@ -19,10 +19,9 @@ botocore>=1.34.0
 spacy>=3.6.0,<3.8.0
 
 # GLiNER and GLiREL for entity and relation extraction
-# Note: These might need to be installed from GitHub if not on PyPI
-# gliner>=0.1.0  
-# glirel>=0.1.0
-# For now, comment out until packages are available or implement fallbacks
+gliner>=0.2.24
+glirel>=1.2.1
+loguru>=0.7.3  # Required by GLiREL
 
 # Deduplication backends
 splink>=3.0.0

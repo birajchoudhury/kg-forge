@@ -32,7 +32,7 @@ class SpacyLexicalBackend(BaseExtractionBackend):
     def __init__(self,
                  spacy_model: str = "en_core_web_sm",
                  gliner_model: str = "urchade/gliner_base", 
-                 glirel_model: str = "urchade/glirel_base",
+                 glirel_model: str = "jackboyla/glirel-large-v0",
                  device: str = "cpu",
                  entity_threshold: float = 0.5,
                  relation_threshold: float = 0.5,
@@ -101,7 +101,7 @@ class SpacyLexicalBackend(BaseExtractionBackend):
                     threshold=self.entity_threshold
                 )
                 
-                # Initialize GLiREL wrapper
+                # Initialize GLiREL wrapper (real models only)
                 if not GLIREL_AVAILABLE:
                     raise BackendNotAvailableError("GLiREL not available")
                 
@@ -161,6 +161,7 @@ class SpacyLexicalBackend(BaseExtractionBackend):
             relation_types = self._get_relation_types_from_ontology(ontology)
             
             # Step 6: Extract relations with GLiREL
+            logger.debug(f"About to call GLiREL with relation_types: {relation_types}, type: {type(relation_types)}")
             glirel_relations = self.glirel_wrapper.extract_relations(content, gliner_entities, relation_types)
             
             # Step 7: Filter relations by distance
