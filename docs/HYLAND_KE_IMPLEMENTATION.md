@@ -107,7 +107,7 @@ from kg_forge.curation import create_curation_backend
 
 # Create Hyland KE backend
 backend = create_curation_backend(
-    "hylandKE",
+    "hyland_ke",
     hyland_client_id="your_client_id",
     hyland_client_secret="your_client_secret"
 )
@@ -127,10 +127,10 @@ print(result.markdown_path)
 
 ```bash
 # Ingest using Hyland KE backend
-kg-forge ingest --source ./documents --curator hylandKE --namespace production
+kg-forge ingest --source ./documents --curator hyland_ke --namespace production
 
 # With custom options (future enhancement)
-kg-forge ingest --source ./documents --curator hylandKE \
+kg-forge ingest --source ./documents --curator hyland_ke \
   --hyland-chunking \
   --hyland-chunk-size 2000
 ```

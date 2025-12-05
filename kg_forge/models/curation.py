@@ -44,7 +44,7 @@ class CurationResult(BaseModel):
     curated_text: str = Field(..., description="Cleaned, curated text content")
     markdown_path: Path = Field(..., description="Path to saved markdown file")
     metadata: DocumentMetadata = Field(..., description="Extracted document metadata")
-    curation_backend: str = Field(..., description="Backend used for curation (docling, hylandKE)")
+    curation_backend: str = Field(..., description="Backend used for curation (docling, hyland_ke)")
     curated_at: datetime = Field(default_factory=datetime.now, description="Curation timestamp")
     warnings: list[str] = Field(default_factory=list, description="Any warnings during curation")
 

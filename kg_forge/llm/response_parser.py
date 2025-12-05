@@ -250,8 +250,10 @@ class ResponseParser:
                                extra={"doc_id": self.doc_id})
                 else:
                     # Could not find entity in content - use safe defaults
-                    logger.warning(f"Could not locate entity '{entity_name}' in content", 
-                                 extra={"doc_id": self.doc_id})
+                    # This is expected for inferred/conceptual entities
+                    logger.debug(f"Could not locate entity '{entity_name}' in content "
+                                f"(LLM may have inferred conceptual entity)", 
+                                extra={"doc_id": self.doc_id})
                     start_offset = 0
                     end_offset = len(entity_name)
         elif original_content:

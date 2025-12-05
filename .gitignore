@@ -72,8 +72,12 @@ entities_extract/README.md
 
 # Generated output files
 output/
-test_*.py
-!tests/test_*.py
+*.md
+!README.md
+!ReadMe.md
+!docs/**/*.md
+!specs/**/*.md
+!*.egg-info/*.md
 
 # Personal configuration and sensitive data
 .env
@@ -108,13 +112,21 @@ postgres-data/
 !test_data/*.html
 !test_docs/*.html
 
-# Demo and test scripts
-demo_deduplication.py
-simple_dedup_demo.py
+# Test data PDFs (may contain sensitive content)
+test_data/*.pdf
+test_docs/*.pdf
+
+# Demo and test scripts in root directory (not in tests/)
+demo_*.py
+debug_*.py
+simple_*.py
 query_results.py
+analyze_results.py
+test_*.py
+!tests/test_*.py
 
 # Additional virtual environments
-venv1/
+.venv*/
 venv*/
 
 # Python egg-info directories (already covered but being explicit)

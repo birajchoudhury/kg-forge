@@ -55,7 +55,7 @@ For this project:
 
 The user can choose the curation and extraction modes at runtime:
 
---curator [docling|hylandKE] (default docling)
+--curator [docling|hyland_ke] (default docling)
 --extractor [llm|spacy] (default llm)
 
 For the first step, we want **basic implementations** with minimal external dependencies:
@@ -136,7 +136,7 @@ Parameters such as:
 - Bedrock credentials (access keys / region),
 - Neo4j location & credentials,
 - Bedrock model name,
-- **Curator backend** (docling or hylandKE),
+- **Curator backend** (docling or hyland_ke),
 - **Extractor mode** (llm or spacy),
 - **Dedup backend** (none, splink, zingg, both/ensemble),
 are provided via a `.env` file.
@@ -160,7 +160,7 @@ are provided via a `.env` file.
        - Converts documents (HTML, PDF, DOCX, etc.) to markdown
        - Extracts clean text with structure preservation
        - Saves markdown to `output/markdowns/<namespace>/<doc_id>.md`
-     - **HylandKE** (future): Curated content API integration
+     - **hyland_ke** (future): Curated content API integration
    - Output:
      - **Markdown file**: Saved to disk for provenance and review
      - **Curated text**: Clean text string used by extraction backends
@@ -298,7 +298,7 @@ class CurationBackend(Protocol):
 Implementations:
 
 - **DoclingCurationBackend**: Uses Docling library for multi-format processing (HTML, PDF, DOCX, etc.)
-- **HylandKECurationBackend** (future): Integration with Hyland curated content API
+- **hyland_ke_CurationBackend** (future): Integration with Hyland curated content API
 
 ### 3.2.2 ExtractionBackend
 
@@ -833,8 +833,7 @@ Top-level command exposes subcommands:
 - query
 - render
 - render-ontology
-- neo4j-start
-- neo4j-stop
+- neo4j (subcommands: init-schema, clear-database, status)
 - export-entities
 
 Common options:
@@ -858,7 +857,7 @@ Options:
 - --source PATH (required)
   - Folder containing document files (HTML, PDF, DOCX, etc.).
 - --namespace TEXT (default "default")
-- --curator [docling|hylandKE] (default docling)
+- --curator [docling|hyland_ke] (default docling)
   - Selects curation backend for document processing.
 - --refresh (flag)
   - If not set:
@@ -987,6 +986,23 @@ Behaviour:
   - Wrap starting/stopping a local Neo4j process,
   - Helpful for local dev & tests.
 
+- neo4j clear-database
+  - Purge the knowledge graph (delete all nodes and relationships).
+  - Options:
+    - --namespace TEXT (default: all namespaces)
+      - Scope deletion to specific namespace only.
+    - --yes (flag)
+      - Skip confirmation prompt (for scripting).
+    - --output [table|json|raw] (default: table)
+      - Output format.
+  - Behaviour:
+    - If namespace is provided:
+      - Delete only nodes/relationships with matching namespace property.
+    - If namespace is not provided:
+      - Delete ALL nodes and relationships in the database.
+    - Requires confirmation unless --yes is provided.
+    - Reports count of deleted nodes.
+
 - export-entities
   - Read entities from Neo4j,
   - Generate entities_extract/*.md from KG content,
@@ -1021,7 +1037,7 @@ Docling processes multiple document formats:
   - Skip failed documents and continue processing
   - Track failure count in batch summary
 
-#### 9.1.2 HylandKE Backend (Future)
+#### 9.1.2 hyland_ke Backend (Future)
 
 Integration with Hyland curated content API:
 
@@ -1147,7 +1163,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - Namespace-based markdown organization
   - CurationResult model validation
 - Add CLI flag --curator to select backend (default: docling).
-- Stub HylandKECurationBackend for future implementation.
+- Stub hyland_ke_CurationBackend for future implementation.
 
 ### Step 4 – Load Entity Definitions
 

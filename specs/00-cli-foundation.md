@@ -41,7 +41,7 @@ kg-forge ingest --source <path> [options]
 
 **Optional Arguments:**
 - `--namespace` - Experiment namespace (default: "default", alphanumeric only)
-- `--curator` - Curation backend: docling|hylandKE (default: docling)
+- `--curator` - Curation backend: docling|hyland_ke (default: docling)
 - `--dry-run` - Extract entities but don't write to graph
 - `--refresh` - Re-import even if content hash matches
 - `--prompt-template` - Override prompt template file
@@ -264,7 +264,7 @@ kg_forge/
 - Add `--help` for all commands and subcommands
 - Use Click's built-in validation where possible
 - Add `--version` flag to show version information
-- Support curation backend selection via `--curator` flag (docling|hylandKE)
+- Support curation backend selection via `--curator` flag (docling|hyland_ke)
 - Support extraction backend selection via `--extractor` flag (llm|spacy)
 - Support deduplication backend selection via `--dedup-backend` flag (none|splink|zingg|both)
 - Validate all backend choices with clear error messages
@@ -274,7 +274,7 @@ kg_forge/
 - Support .env file, YAML config files, and environment variables
 - Implement configuration precedence (CLI args > YAML > env vars > .env > defaults)
 - Provide clear error messages for missing or invalid configuration
-- Validate curation backend choices (docling, hylandKE)
+- Validate curation backend choices (docling, hyland_ke)
 - Validate extraction backend choices (llm, spacy)
 - Validate deduplication backend choices (none, splink, zingg, both)
 - Support default values for curator, extractor, and deduplication settings
@@ -306,7 +306,7 @@ kg_forge/
 - Test configuration loading from various sources (env, YAML, CLI args)
 - Test configuration precedence order
 - Test namespace validation
-- Test curation backend validation (docling, hylandKE, invalid choices)
+- Test curation backend validation (docling, hyland_ke, invalid choices)
 - Test extraction backend validation (llm, spacy, invalid choices)
 - Test deduplication backend validation (none, splink, zingg, both, invalid choices)
 - Test error handling scenarios for all invalid backend choices
@@ -318,7 +318,7 @@ kg_forge/
 - Sample command-line invocations with --curator, --extractor, and --dedup-backend flags
 - Invalid configuration scenarios including all types of invalid backend choices
 - Invalid namespace examples
-- Valid curator backend choices (docling, hylandKE)
+- Valid curator backend choices (docling, hyland_ke)
 - Invalid curator backend choices (invalid_curator)
 - Valid extractor backend choices (llm, spacy)
 - Invalid extractor backend choices (invalid_extractor)
@@ -335,7 +335,7 @@ kg_forge/
 2. **Version Info**: `kg-forge --version` displays version information
 3. **Configuration**: Config loading works from .env file, YAML files, and environment variables with correct precedence
 4. **Namespace Validation**: Invalid namespace names are properly rejected
-5. **Curator Backend Validation**: Invalid curator choices are properly rejected with helpful error messages (valid: docling, hylandKE)
+5. **Curator Backend Validation**: Invalid curator choices are properly rejected with helpful error messages (valid: docling, hyland_ke)
 6. **Extractor Backend Validation**: Invalid extractor choices are properly rejected with helpful error messages (valid: llm, spacy)
 7. **Dedup Backend Validation**: Invalid dedup-backend choices are properly rejected with helpful error messages (valid: none, splink, zingg, both)
 8. **Default Values**: Backend settings use proper defaults (curator: docling, extractor: llm, dedup-backend: splink)

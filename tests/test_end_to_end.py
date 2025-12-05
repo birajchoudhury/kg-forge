@@ -541,41 +541,50 @@ Programming language.
         (entities_dir / "technology.md").write_text(tech_def.strip())
         self.ontology = FilesystemOntologyPack(ontology_dir)
     
-    @patch('kg_forge.extraction.spacy_backend.SpacyLexicalBackend')
-    def test_spacy_extraction_pipeline(self, mock_spacy):
+    def test_spacy_extraction_pipeline(self):
         """Test pipeline with Spacy backend (mocked to avoid model dependencies)."""
-        print("\n=== Testing Spacy Extraction Pipeline ===")
+        # Skip if numpy/thinc compatibility issue exists
+        try:
+            import spacy
+        except (ValueError, ImportError) as e:
+            if "numpy.dtype size changed" in str(e) or "binary incompatibility" in str(e):
+                self.skipTest(f"Skipping due to numpy/spaCy compatibility issue: {e}")
+            raise
         
-        # Mock Spacy backend
-        mock_backend = MagicMock()
-        mock_spacy.return_value = mock_backend
-        
-        # Mock spacy extraction results
-        mock_mentions = [
-            LexicalMention(
-                id="spacy_1", doc_id="test_doc", entity_type="Technology",
-                surface="Python", start_offset=10, end_offset=16,
-                features={"confidence": 0.8, "pos_tag": "NOUN"}
+        # Now that import check passed, apply mock
+        with patch('kg_forge.extraction.spacy_backend.SpacyLexicalBackend') as mock_spacy:
+            print("\n=== Testing Spacy Extraction Pipeline ===")
+            
+            # Mock Spacy backend
+            mock_backend = MagicMock()
+            mock_spacy.return_value = mock_backend
+            
+            # Mock spacy extraction results
+            mock_mentions = [
+                LexicalMention(
+                    id="spacy_1", doc_id="test_doc", entity_type="Technology",
+                    surface="Python", start_offset=10, end_offset=16,
+                    features={"confidence": 0.8, "pos_tag": "NOUN"}
+                )
+            ]
+            
+            mock_graph = LexicalGraph(
+                mentions=mock_mentions,
+                relations=[],
+                metadata={"backend": "spacy", "model": "en_core_web_sm"}
             )
-        ]
-        
-        mock_graph = LexicalGraph(
-            mentions=mock_mentions,
-            relations=[],
-            metadata={"backend": "spacy", "model": "en_core_web_sm"}
-        )
-        
-        mock_backend.extract_entities.return_value = mock_graph
-        
-        # Test extraction
-        backend = mock_spacy(fake_mode=True)
-        result = backend.extract_entities("The team uses Python for development.", doc_id="test_doc")
-        
-        self.assertGreater(len(result.mentions), 0)
-        self.assertEqual(result.metadata["backend"], "spacy")
-        print(f"✓ Spacy backend extracted {len(result.mentions)} entities")
-        
-        print("\n=== Spacy Extraction Pipeline Test: SUCCESS ===")
+            
+            mock_backend.extract_entities.return_value = mock_graph
+            
+            # Test extraction
+            backend = mock_spacy(fake_mode=True)
+            result = backend.extract_entities("The team uses Python for development.", doc_id="test_doc")
+            
+            self.assertGreater(len(result.mentions), 0)
+            self.assertEqual(result.metadata["backend"], "spacy")
+            print(f"✓ Spacy backend extracted {len(result.mentions)} entities")
+            
+            print("\n=== Spacy Extraction Pipeline Test: SUCCESS ===")
 
 
 class TestDeduplicationBackendComparison(unittest.TestCase):

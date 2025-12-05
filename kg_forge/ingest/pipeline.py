@@ -66,7 +66,7 @@ class IngestPipeline:
             prompt_template: Override prompt template file
             model: Override LLM model name
             max_docs: Limit number of documents processed
-            curator: Curation backend (docling|hylandKE, default from config)
+            curator: Curation backend (docling|hyland_ke, default from config)
             extractor: Extraction backend (llm|spacy, default from config)
             dedup_backend: Deduplication backend (none|splink|zingg|both, default from config)
             fake_llm: Use fake LLM for testing
@@ -98,7 +98,7 @@ class IngestPipeline:
         
         # Initialize curation backend
         curation_config = {}
-        if self.curator == "hylandKE":
+        if self.curator == "hyland_ke":
             # Get credentials from hyland_ke config section
             curation_config['hyland_client_id'] = getattr(self.config.hyland_ke, 'client_id', None)
             curation_config['hyland_client_secret'] = getattr(self.config.hyland_ke, 'client_secret', None)
@@ -314,19 +314,19 @@ class IngestPipeline:
             extraction_start = time.time()
             lexical_graph = self._extract_entities(curation_result, doc_id)
             self.metrics.add_llm_time(time.time() - extraction_start)
-            self.metrics.entities_extracted = len(lexical_graph.mentions)
+            self.metrics.record_entities_extracted(len(lexical_graph.mentions))
             
             # Phase 2: Apply deduplication
             dedup_start = time.time()
             deduplicated_graph = self._apply_deduplication(lexical_graph)
             dedup_time = time.time() - dedup_start
-            self.metrics.entities_deduped = len(deduplicated_graph.canonical_entities)
+            self.metrics.record_entities_deduped(len(deduplicated_graph.canonical_entities))
             
             # Phase 3: Apply entity linking
             linking_start = time.time()
             link_results = self._apply_entity_linking(deduplicated_graph)
             linking_time = time.time() - linking_start
-            self.metrics.entities_linked = sum(1 for r in link_results if r.is_linked_entity())
+            self.metrics.record_entities_linked(sum(1 for r in link_results if r.is_linked_entity()))
             
             # Prepare metadata for hooks
             metadata = {

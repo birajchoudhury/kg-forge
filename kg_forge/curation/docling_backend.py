@@ -111,7 +111,7 @@ class DoclingCurationBackend:
             # Extract metadata
             metadata = self._extract_metadata(result, source_path, file_ext)
 
-            # Save markdown file
+            # Step 6: Save markdown file
             markdown_path = self._save_markdown(
                 markdown_content,
                 doc_id,

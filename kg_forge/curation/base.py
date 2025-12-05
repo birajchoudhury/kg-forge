@@ -60,6 +60,6 @@ class CurationBackend(Protocol):
         Get the backend name.
         
         Returns:
-            Backend identifier (e.g., 'docling', 'hylandKE')
+            Backend identifier (e.g., 'docling', 'hyland_ke')
         """
         ...

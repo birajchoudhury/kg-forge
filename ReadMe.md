@@ -225,7 +225,7 @@ kg_forge/
 kg-forge neo4j start
 
 # Initialize database schema
-kg-forge neo4j init
+kg-forge neo4j init-schema
 
 # Check connection
 kg-forge neo4j status
@@ -296,7 +296,7 @@ kg-forge provides several commands for working with knowledge graphs:
 kg-forge ingest --source <path/to/documents>
 
 # Use Hyland Knowledge Enrichment for curation
-kg-forge ingest --source <path> --curator hylandKE --extractor llm
+kg-forge ingest --source <path> --curator hyland_ke --extractor llm
 
 # Use neural NLP pipeline (spaCy + GLiNER + GLiREL)
 kg-forge ingest --source <path> --curator docling --extractor spacy
@@ -372,10 +372,12 @@ kg-forge neo4j stop
 kg-forge neo4j status
 
 # Initialize database schema
-kg-forge neo4j init
+kg-forge neo4j init-schema
 
-# Clear namespace data
-kg-forge neo4j clear --namespace test --confirm
+# Clear database (purge all data)
+kg-forge neo4j clear-database --yes                    # Delete all namespaces
+kg-forge neo4j clear-database --namespace test --yes   # Delete specific namespace only
+kg-forge neo4j clear-database --namespace test         # Interactive confirmation
 ```
 
 #### Ontology Management
@@ -424,9 +426,9 @@ NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=password
 
 # Document Curation (choose backend)
-DEFAULT_CURATOR=docling                 # or 'hylandKE'
+DEFAULT_CURATOR=docling                 # or 'hyland_ke'
 
-# Hyland Knowledge Enrichment (if using hylandKE curator)
+# Hyland Knowledge Enrichment (if using hyland_ke curator)
 HYLAND_KE_CLIENT_ID=your_client_id
 HYLAND_KE_CLIENT_SECRET=your_client_secret
 # Optional: override default endpoints
@@ -478,7 +480,7 @@ aws:
 app:
   log_level: INFO
   default_namespace: default
-  default_curator: docling              # or 'hylandKE'
+  default_curator: docling              # or 'hyland_ke'
   default_extractor: llm                # or 'spacy'
   default_dedup_backend: splink         # or 'zingg', 'both', 'none'
   ontology_pack: ai_ml_confluence       # Optional
@@ -597,7 +599,7 @@ kg-forge parse --source ~/documents/
 kg-forge ingest --source ~/documents/ --curator docling --extractor llm --dedup-backend splink
 
 # Cloud-optimized processing (Hyland KE + Bedrock)
-kg-forge ingest --source ~/documents/ --curator hylandKE --extractor llm --dedup-backend splink
+kg-forge ingest --source ~/documents/ --curator hyland_ke --extractor llm --dedup-backend splink
 
 # Neural NLP pipeline for higher precision (all local, no API calls)
 kg-forge ingest --source ~/documents/ --curator docling --extractor spacy --dedup-backend zingg
@@ -621,7 +623,7 @@ Use namespaces to compare different backend combinations:
 ```bash
 # Test different curation and extraction approaches
 kg-forge ingest --source ~/docs/ --namespace docling_llm --curator docling --extractor llm
-kg-forge ingest --source ~/docs/ --namespace hyland_llm --curator hylandKE --extractor llm
+kg-forge ingest --source ~/docs/ --namespace hyland_llm --curator hyland_ke --extractor llm
 kg-forge ingest --source ~/docs/ --namespace docling_spacy --curator docling --extractor spacy
 
 # Compare results

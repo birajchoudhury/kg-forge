@@ -63,7 +63,7 @@ class HylandKECurationBackend:
         Raises:
             CurationBackendError: If client credentials are missing
         """
-        self._backend_name = "hylandKE"
+        self._backend_name = "hyland_ke"
         
         # Validate credentials
         if not client_id or not client_secret:

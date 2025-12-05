@@ -23,7 +23,7 @@ Step 7 implements the end-to-end ingest pipeline that orchestrates all previous 
   - Applies `process_after_batch` hook at the end of a batch or ingest run
 - Implement full semantics for `kg-forge ingest` options:
   - `--source`, `--namespace`, `--dry-run`, `--refresh`
-  - `--curator` (docling|hylandKE) - selects document curation backend
+  - `--curator` (docling|hyland_ke) - selects document curation backend
   - `--prompt-template`, `--model` (for LLM backend)
   - `--extractor` (llm|spacy), `--dedup-backend` (none|splink|zingg|both)
 - Implement **content hashing** and **idempotent ingest**:
@@ -60,7 +60,7 @@ Step 7 implements the end-to-end ingest pipeline that orchestrates all previous 
 ### Inputs from Step 3 (Document Curation)
 
 Step 7 depends on Step 3 providing:
-- **CurationBackend**: Pluggable backend interface (Docling or HylandKE)
+- **CurationBackend**: Pluggable backend interface (Docling or hyland_ke)
 - **CurationResult**: Output model with curated_text, markdown_content, markdown_path, metadata
 - **Multi-Format Support**: Ability to process HTML, PDF, DOCX, and other formats
 - **Format Detection**: Automatic detection of document format from file extension
@@ -104,7 +104,7 @@ The ingest pipeline follows this sequence:
 
 1. **Configuration Resolution**: Load settings from Step 0 and merge CLI options with precedence
 2. **Backend Initialization**: 
-   - Initialize curation backend (`--curator`: docling or hylandKE)
+   - Initialize curation backend (`--curator`: docling or hyland_ke)
    - Initialize extraction backend (`--extractor`: llm or spacy)
    - Initialize dedup backend (`--dedup-backend`: none, splink, zingg, or both)
 3. **File Discovery**: Walk `--source` directory recursively, discovering all supported document files with stable ordering
