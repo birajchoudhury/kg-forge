@@ -2,26 +2,27 @@
 
 [![CI](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml)
 ![Coverage](https://raw.githubusercontent.com/birajchoudhury/kg-forge/badges/.github/coverage.svg)
-![Tests](https://img.shields.io/badge/tests-387%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-475%20passed-brightgreen)
 
-A comprehensive CLI tool for building knowledge graphs from unstructured content. Extract entities and relationships using either LLM-based extraction or advanced neural NLP pipelines (spaCy + GLiNER + GLiREL), with built-in deduplication and interactive graph visualization.
+A comprehensive CLI tool for building knowledge graphs from unstructured documents. Extract entities and relationships using flexible curation and extraction backends, with built-in deduplication and interactive graph visualization.
 
 ## Description
 
-Knowledge Graph Forge is a powerful command-line tool designed to extract entities and relationships from unstructured content and build sophisticated knowledge graphs. It provides flexible extraction backends, advanced deduplication capabilities, and interactive visualization tools.
+Knowledge Graph Forge is a powerful command-line tool that transforms unstructured documents into structured knowledge graphs. It provides flexible document curation, multiple extraction backends, advanced deduplication capabilities, and interactive visualization tools.
 
 ### Key Features
 
-- **Dual Extraction Pipelines**: Choose between LLM-based extraction (AWS Bedrock) or neural NLP pipelines (spaCy + GLiNER + GLiREL)
-- **Advanced Entity Deduplication**: Built-in support for Splink (probabilistic) and Zingg (ML-based) deduplication backends
-- **Ontology Management**: Flexible ontology pack system for defining entity types, relationships, and extraction rules
-- **Interactive Visualization**: Generate beautiful HTML visualizations of your knowledge graphs and ontologies
+- **Flexible Document Curation**: Choose between Docling (local, fast) or Hyland Knowledge Enrichment (cloud-based, optimized)
+- **Dual Extraction Pipelines**: LLM-based extraction (AWS Bedrock) or neural NLP pipelines (spaCy + GLiNER + GLiREL)
+- **Advanced Entity Deduplication**: Built-in support for Splink (probabilistic) and Zingg (ML-based) deduplication
+- **Ontology Management**: Define entity types, relationships, and extraction rules using modular ontology packs
+- **Interactive Visualization**: Generate beautiful HTML visualizations of knowledge graphs and ontologies
 - **Neo4j Integration**: Full Neo4j support with namespace isolation for multi-tenant experimentation
-- **Production Ready**: Comprehensive test suite (387+ tests) with both unit and integration testing
+- **Production Ready**: Comprehensive test suite (475+ tests) with both unit and integration testing
 
 The tool addresses key challenges in knowledge graph construction:
-- How to extract meaningful entities and topics from diverse content sources
-- Optimal strategies for storing, organizing, merging, and pruning knowledge graphs  
+- How to curate and extract meaningful entities from diverse document formats (HTML, PDF, DOCX, TXT, XML)
+- Optimal strategies for storing, organizing, merging, and pruning knowledge graphs
 - Creating and evolving useful ontologies for domain-specific use cases
 - Scaling entity resolution and deduplication across large document collections
 
@@ -36,83 +37,142 @@ kg_forge/
 │   │   ├── query.py             # Knowledge graph querying
 │   │   ├── render.py            # Graph visualization
 │   │   ├── render_ontology.py   # Ontology visualization
-│   │   ├── parse.py             # HTML parsing and exploration
+│   │   ├── parse.py             # Document parsing and exploration
 │   │   ├── extract_test.py      # Extraction backend testing
-│   │   ├── entities.py          # Entity management
+│   │   ├── entities.py          # Entity management (legacy CLI)
 │   │   ├── ontology.py          # Ontology pack management
 │   │   ├── neo4j_ops.py         # Neo4j operations
 │   │   └── export_entities.py   # Entity export
-│   ├── extraction/              # Extraction backends
+│   ├── curation/                # Document curation backends
+│   │   ├── factory.py           # Curation backend factory
+│   │   ├── docling_backend.py   # Docling (local processing)
+│   │   ├── hyland_backend.py    # Hyland KE (cloud API)
+│   │   ├── base.py              # Base interfaces
+│   │   └── errors.py            # Curation exceptions
+│   ├── extraction/              # Entity extraction backends
+│   │   ├── interface.py         # Common interfaces
 │   │   ├── llm_backend.py       # LLM-based extraction
 │   │   ├── spacy_backend.py     # Neural NLP pipeline
 │   │   ├── fake_backend.py      # Testing backend
-│   │   └── interface.py         # Common interfaces
+│   │   └── exceptions.py        # Extraction exceptions
+│   ├── llm/                     # LLM integrations
+│   │   ├── bedrock_client.py    # AWS Bedrock client
+│   │   ├── bedrock_extractor.py # Bedrock extraction wrapper
+│   │   ├── prompt_builder.py    # Prompt construction
+│   │   ├── response_parser.py   # JSON response parsing
+│   │   ├── client.py            # Base LLM client
+│   │   ├── parser.py            # Response parsing utilities
+│   │   ├── fake_extractor.py    # Fake LLM for testing
+│   │   └── exceptions.py        # LLM-specific exceptions
 │   ├── dedup/                   # Deduplication backends
+│   │   ├── interface.py         # Common interfaces
 │   │   ├── splink_backend.py    # Probabilistic deduplication
 │   │   ├── zingg_backend.py     # ML-based deduplication
 │   │   ├── ensemble_backend.py  # Combined approach
 │   │   └── no_dedup_backend.py  # Pass-through backend
 │   ├── linking/                 # Entity linking
-│   │   └── entity_linker.py     # Canonical entity resolution
+│   │   ├── interface.py         # Linking interfaces
+│   │   └── default_linker.py    # Canonical entity resolution
 │   ├── nlp/                     # Neural NLP components
-│   │   ├── spacy_wrapper.py     # spaCy integration
+│   │   ├── spacy_pipeline.py    # spaCy integration
 │   │   ├── gliner_wrapper.py    # GLiNER entity recognition
 │   │   └── glirel_wrapper.py    # GLiREL relation extraction
-│   ├── ontology/               # Ontology management system
-│   │   ├── base.py             # Base classes and registry
-│   │   ├── filesystem_pack.py  # File-based ontology packs
-│   │   └── models.py           # Ontology data models
-│   ├── graph/                  # Graph database abstraction
-│   │   ├── base.py             # Abstract interfaces
-│   │   ├── factory.py          # Backend factory
-│   │   └── neo4j/              # Neo4j implementation
-│   ├── ingest/                 # Ingestion pipeline
-│   │   └── pipeline.py         # Complete pipeline orchestration
-│   ├── render/                 # Visualization engines
-│   │   ├── graph_renderer.py   # Knowledge graph visualization
-│   │   └── ontology_renderer.py # Ontology visualization
-│   ├── parsers/                # Content parsing
-│   │   ├── html_parser.py      # Confluence HTML parsing
-│   │   └── document_loader.py  # Bulk document loading
-│   ├── entities/               # Legacy entity management
-│   ├── models/                 # Data models
-│   ├── config/                 # Configuration system
-│   ├── hooks/                  # Extensibility hooks
-│   ├── llm/                    # LLM integrations
-│   └── utils/                  # Common utilities
-├── tests/                  # Test suite
-│   ├── __init__.py
-│   ├── test_cli/           # CLI tests
-│   ├── test_config/        # Config tests
-│   ├── test_parsers/       # Parser tests
-│   ├── test_entities/      # Entity tests
-│   └── test_graph/         # Graph database tests
-│       ├── __init__.py
-│       ├── conftest.py     # Shared fixtures (Rancher-compatible)
-│       ├── test_entity_repo.py    # Unit tests (mocks)
-│       └── test_integration.py    # Integration tests (Docker)
-├── ontology_packs/         # Ontology pack definitions
-│   └── ai_ml_confluence/   # AI/ML domain ontology pack
-│       ├── entities/       # Entity type definitions
-│       ├── templates/      # Prompt templates
-│       ├── styles/         # Visualization styles
-│       └── ontology.yaml   # Pack configuration
-├── specs/                  # Specification documents
-│   ├── seed.md             # Initial specification
-│   ├── 01-cli-foundation.md         # CLI foundation
-│   ├── 02-html-parsing-and-document-model.md  # HTML parsing
-│   ├── 03-entity-definitions-loading.md  # Entity loading
-│   └── 04-neo4j-bootstrap.md        # Neo4j implementation
-├── docs/                   # Documentation
-│   ├── CI_SETUP.md         # CI/CD setup guide
-│   └── PARSING_HTML.md     # HTML parsing documentation
-├── requirements.txt        # Project dependencies
-├── setup.py               # Package setup file
-├── docker-compose.yml     # Neo4j container configuration
-├── .env.example           # Example environment variables
-├── kg_forge.yaml.example  # Example YAML configuration
-└── .gitignore             # Git ignore file
+│   ├── ontology/                # Ontology management system
+│   │   ├── base.py              # Base classes and registry
+│   │   ├── filesystem_pack.py   # File-based ontology packs
+│   │   └── models.py            # Ontology data models (deprecated, use entities/)
+│   ├── entities/                # Entity definition system
+│   │   ├── definitions.py       # Entity definition loader
+│   │   └── models.py            # Entity type models
+│   ├── graph/                   # Graph database abstraction
+│   │   ├── neo4j_client.py      # Neo4j client wrapper
+│   │   ├── schema.py            # Schema management
+│   │   └── exceptions.py        # Graph exceptions
+│   ├── ingest/                  # Ingestion pipeline
+│   │   ├── pipeline.py          # Complete pipeline orchestration
+│   │   ├── filesystem.py        # File discovery
+│   │   ├── hooks.py             # Hook system
+│   │   └── metrics.py           # Pipeline metrics
+│   ├── render/                  # Visualization engines
+│   │   ├── graph_renderer.py    # Knowledge graph visualization
+│   │   └── ontology_visualizer.py # Ontology visualization
+│   ├── parsers/                 # HTML parsing utilities
+│   │   ├── html_parser.py       # Confluence HTML parser
+│   │   └── document_loader.py   # Bulk document loading
+│   ├── models/                  # Data models
+│   │   ├── lexical.py           # Lexical graph models
+│   │   ├── curation.py          # Curation result models
+│   │   ├── dedup.py             # Deduplication models
+│   │   └── document.py          # Document models
+│   ├── config/                  # Configuration system
+│   │   └── settings.py          # Pydantic-based config
+│   ├── hooks/                   # Extensibility hooks
+│   │   ├── registry.py          # Hook registry
+│   │   └── examples/            # Example hook implementations
+│   ├── utils/                   # Common utilities
+│   │   ├── hashing.py           # Content hashing
+│   │   ├── logging.py           # Logging setup
+│   │   └── interactive.py       # Interactive session
+│   └── ontology_manager.py      # Global ontology manager
+├── tests/                       # Test suite (475+ tests)
+│   ├── test_cli/                # CLI command tests
+│   ├── test_config/             # Configuration tests
+│   ├── test_curation/           # Curation backend tests
+│   │   ├── test_docling_backend.py    # Docling tests
+│   │   ├── test_hyland_backend.py     # Hyland KE tests (29 tests)
+│   │   └── test_factory.py            # Factory tests
+│   ├── test_extraction/         # Extraction backend tests
+│   ├── test_llm/                # LLM integration tests
+│   ├── test_parsers/            # Parser tests
+│   ├── test_entities/           # Entity definition tests
+│   ├── test_dedup/              # Deduplication tests
+│   ├── test_linking/            # Entity linking tests
+│   ├── test_models/             # Data model tests
+│   ├── test_render/             # Visualization tests
+│   ├── test_graph/              # Graph database tests
+│   │   ├── conftest.py          # Shared fixtures (Rancher-compatible)
+│   │   └── test_integration.py  # Integration tests (Docker)
+│   ├── test_cli_e2e.py          # End-to-end CLI tests
+│   ├── test_core_integration.py # Core integration tests
+│   └── test_end_to_end.py       # Full pipeline tests
+├── ontology_packs/              # Ontology pack definitions
+│   └── ai_ml_confluence/        # AI/ML domain ontology pack
+│       ├── entities/            # Entity type definitions
+│       ├── templates/           # Prompt templates
+│       ├── styles/              # Visualization styles
+│       └── ontology.yaml        # Pack configuration
+├── specs/                       # Implementation specifications
+│   ├── seed_product.md          # Product vision
+│   ├── seed_architecture.md     # Architecture specification
+│   ├── 00-cli-foundation.md     # CLI foundation
+│   ├── 01-ontology-management.md            # Ontology system
+│   ├── 02-ontology-visualization.md         # Ontology rendering
+│   ├── 03-html-parsing-and-document-model.md # Document parsing
+│   ├── 04-load-entity-definitions.md        # Entity loading
+│   ├── 05-neo4j-bootstrap.md                # Neo4j setup
+│   ├── 06-llm-integration-and-extractor.md  # LLM extraction
+│   ├── 07-ingest-pipeline.md                # Pipeline orchestration
+│   └── 08-graph-rendering-and-exploration.md # Graph visualization
+├── docs/                        # Documentation
+│   ├── CI_SETUP.md              # CI/CD setup guide
+│   ├── HYLAND_KE_IMPLEMENTATION.md  # Hyland KE guide
+│   ├── ONTOLOGY_PACKS.md        # Ontology pack system
+│   ├── PARSING_HTML.md          # HTML parsing
+│   └── AWS_AUTHENTICATION.md    # AWS credentials setup
+├── test_data/                   # Test documents
+├── requirements.txt             # Project dependencies
+├── setup.py                     # Package setup file
+├── docker-compose.yml           # Neo4j container configuration
+├── .env.example                 # Example environment variables
+├── kg_forge.yaml.example        # Example YAML configuration
+└── .gitignore                   # Git ignore file
 ```
+
+**Note on structure:**
+- `parsers/` and `entities/` directories are actively used (not legacy)
+- `parsers/` provides HTML parsing utilities used by the `parse` CLI command
+- `entities/` contains the entity definition system used by ontology packs
+- Root-level test scripts (e.g., `test_real_hyland_e2e.py`, `test_docling_e2e.py`) are development/validation scripts, not part of the main package
 
 ## Installation
 
@@ -120,12 +180,12 @@ kg_forge/
 
 - Python 3.11 or higher
 - Neo4j instance (for graph operations - Docker supported)
-- **For LLM-based extraction**:
-  - AWS account with Bedrock access
-- **For neural NLP pipeline** (automatic installation):
-  - spaCy models (en_core_web_sm)
-  - GLiNER models (urchade/gliner_base - ~800MB)
-  - GLiREL models (jackboyla/glirel-large-v0 - ~2.7GB)
+- **For document curation** (choose one or both):
+  - **Docling**: Local processing (included in dependencies, no credentials needed)
+  - **Hyland Knowledge Enrichment**: Cloud API (requires OAuth credentials - see Configuration)
+- **For entity extraction** (choose one):
+  - **LLM-based**: AWS account with Bedrock access (requires AWS credentials)
+  - **Neural NLP**: spaCy + GLiNER + GLiREL models (auto-downloads ~3.5GB on first use)
 
 ### Setup
 
@@ -171,24 +231,38 @@ kg-forge neo4j init
 kg-forge neo4j status
 ```
 
-### 2. Configure AWS Bedrock Access
+### 2. Configure Credentials (as needed)
+
+**For Docling (local curation) - No configuration needed**
+
+**For Hyland Knowledge Enrichment (cloud curation):**
+```bash
+# Add to .env
+echo "HYLAND_KE_CLIENT_ID=your-client-id" >> .env
+echo "HYLAND_KE_CLIENT_SECRET=your-client-secret" >> .env
+```
+
+**For AWS Bedrock (LLM extraction):**
 ```bash
 # Add to .env  
 echo "AWS_ACCESS_KEY_ID=your-key" >> .env
 echo "AWS_SECRET_ACCESS_KEY=your-secret" >> .env
-echo "BEDROCK_MODEL_NAME=anthropic.claude-3-haiku-20240307-v1:0" >> .env
+echo "AWS_DEFAULT_REGION=us-east-1" >> .env
 ```
 
 ### 3. Process Your First Documents
 ```bash
 # Parse and explore content
-kg-forge parse --source /path/to/html/files/
+kg-forge parse --source /path/to/documents/
 
 # Test extraction on a single document
 kg-forge extract-test sample.html --backend llm
 
-# Run full ingestion pipeline
-kg-forge ingest --source /path/to/html/files/
+# Run full ingestion pipeline (Docling + Bedrock)
+kg-forge ingest --source /path/to/documents/ --curator docling --extractor llm
+
+# Or use Hyland KE for curation
+kg-forge ingest --source /path/to/documents/ --curator hylandKE --extractor llm
 
 # Query results
 kg-forge query list-types
@@ -198,13 +272,16 @@ kg-forge query list-entities --type Product
 kg-forge render --out my_graph.html
 ```
 
-### 4. Try the Neural NLP Pipeline
+### 4. Try Different Backend Combinations
 ```bash
-# Use spaCy + GLiNER + GLiREL (downloads ~3.5GB models on first use)
-kg-forge ingest --source /path/to/html/files/ --extractor spacy --namespace neural_test
+# Fast local processing: Docling + spaCy
+kg-forge ingest --source /path/to/documents/ --curator docling --extractor spacy
 
-# Compare with LLM results
-kg-forge query list-entities --namespace neural_test --type Product
+# Cloud-optimized: Hyland KE + Bedrock
+kg-forge ingest --source /path/to/documents/ --curator hylandKE --extractor llm
+
+# Compare results across namespaces
+kg-forge query list-entities --namespace default --type Product
 ```
 
 ## Usage
@@ -215,17 +292,22 @@ kg-forge provides several commands for working with knowledge graphs:
 
 #### Ingest Content
 ```bash
-# Basic LLM-based ingest from source directory
-kg-forge ingest --source <path/to/html/files>
+# Basic ingestion with Docling curation + Bedrock LLM extraction
+kg-forge ingest --source <path/to/documents>
+
+# Use Hyland Knowledge Enrichment for curation
+kg-forge ingest --source <path> --curator hylandKE --extractor llm
 
 # Use neural NLP pipeline (spaCy + GLiNER + GLiREL)
-kg-forge ingest --source <path> --extractor spacy
+kg-forge ingest --source <path> --curator docling --extractor spacy
 
 # Configure deduplication backend
 kg-forge ingest --source <path> --dedup-backend splink  # or zingg/both/none
 
 # With namespace and other options
 kg-forge ingest --source <path> --namespace test --dry-run --interactive
+
+# Supported document formats: HTML, PDF, DOCX, PPTX, TXT, XML
 ```
 
 #### Query Knowledge Graph
@@ -341,14 +423,24 @@ NEO4J_URI=bolt://localhost:7687
 NEO4J_USERNAME=neo4j
 NEO4J_PASSWORD=password
 
-# AWS Bedrock Configuration
+# Document Curation (choose backend)
+DEFAULT_CURATOR=docling                 # or 'hylandKE'
+
+# Hyland Knowledge Enrichment (if using hylandKE curator)
+HYLAND_KE_CLIENT_ID=your_client_id
+HYLAND_KE_CLIENT_SECRET=your_client_secret
+# Optional: override default endpoints
+# HYLAND_KE_API_URL=https://knowledge-enrichment.ai.experience.hyland.com/latest/api/data-curation
+# HYLAND_KE_OAUTH_URL=https://auth.iam.experience.hyland.com/idp/connect/token
+
+# AWS Bedrock Configuration (if using LLM extractor)
 AWS_ACCESS_KEY_ID=your_access_key_here  
 AWS_SECRET_ACCESS_KEY=your_secret_key_here
 AWS_DEFAULT_REGION=us-east-1
 BEDROCK_MODEL_NAME=anthropic.claude-3-haiku-20240307-v1:0
 
 # Extraction Configuration
-DEFAULT_EXTRACTOR=llm                    # or 'spacy' for neural pipeline
+DEFAULT_EXTRACTOR=llm                   # or 'spacy' for neural pipeline
 DEFAULT_DEDUP_BACKEND=splink            # or 'zingg', 'both', 'none'
 
 # Application Configuration
@@ -366,22 +458,29 @@ neo4j:
   username: neo4j
   password: password
 
-# AWS Bedrock Configuration
+# Hyland Knowledge Enrichment Configuration (optional)
+hyland_ke:
+  client_id: your_client_id
+  client_secret: your_client_secret
+  # Optional curation options:
+  enable_chunking: false
+  normalize_quotations: true
+  normalize_dashes: true
+
+# AWS Bedrock Configuration (optional)
 aws:
   access_key_id: your_access_key_here
   secret_access_key: your_secret_key_here
   default_region: us-east-1
   bedrock_model_name: anthropic.claude-3-haiku-20240307-v1:0
 
-# Extraction Configuration
-extraction:
-  default_backend: llm                   # or 'spacy'
-  default_dedup_backend: splink         # or 'zingg', 'both', 'none'
-
 # Application Configuration
 app:
   log_level: INFO
   default_namespace: default
+  default_curator: docling              # or 'hylandKE'
+  default_extractor: llm                # or 'spacy'
+  default_dedup_backend: splink         # or 'zingg', 'both', 'none'
   ontology_pack: ai_ml_confluence       # Optional
 ```
 
@@ -438,23 +537,25 @@ The integration tests cover:
 
 #### Test Coverage
 
-- **Unit Tests**: 300+ tests covering all components (CLI, extraction, deduplication, linking, parsers, ontology management)
-- **Integration Tests**: 87+ tests with real Neo4j database operations and end-to-end pipeline testing
-- **Total**: 387+ comprehensive tests with continuous integration
-- **Coverage**: Extensive coverage of core functionality, edge cases, and error conditions
+- **Unit Tests**: 390+ tests covering all components (CLI, curation, extraction, deduplication, linking, parsers, ontology management)
+- **Integration Tests**: 85+ tests with real Neo4j database operations and end-to-end pipeline testing
+- **Total**: 475+ comprehensive tests with continuous integration
+- **Coverage**: Extensive coverage of core functionality, edge cases, and error conditions including real-world API testing
 
 ## Features
 
 ### ✅ Complete Implementation
 
 **Core Pipeline Architecture**
+- Flexible document curation: Docling (local, fast) and Hyland KE (cloud-based, optimized)
 - Dual extraction backends: LLM-based (AWS Bedrock) and neural NLP (spaCy + GLiNER + GLiREL)
 - Advanced deduplication: Splink (probabilistic) and Zingg (ML-based) backends
 - Entity linking and canonical entity management
 - Complete ingestion pipeline with hooks and extensibility
 
 **Content Processing**
-- HTML parsing and content curation (optimized for Confluence exports)
+- Multi-format document support: HTML, PDF, DOCX, PPTX, TXT, XML
+- Dual curation backends with automatic format detection
 - Markdown conversion with metadata extraction
 - Content hash-based change detection
 - Bulk document processing with progress tracking
@@ -487,16 +588,19 @@ The integration tests cover:
 ## Practical Use Cases
 
 ### Knowledge Graph Construction from Documentation
-Extract entities and relationships from Confluence exports, wikis, or documentation:
+Extract entities and relationships from various document formats:
 ```bash
 # Initial exploration of content
-kg-forge parse --source ~/confluence_export/ 
+kg-forge parse --source ~/documents/ 
 
-# LLM-based extraction with deduplication
-kg-forge ingest --source ~/confluence_export/ --extractor llm --dedup-backend splink
+# Fast local processing (Docling + LLM)
+kg-forge ingest --source ~/documents/ --curator docling --extractor llm --dedup-backend splink
 
-# Neural NLP pipeline for higher precision
-kg-forge ingest --source ~/confluence_export/ --extractor spacy --dedup-backend zingg
+# Cloud-optimized processing (Hyland KE + Bedrock)
+kg-forge ingest --source ~/documents/ --curator hylandKE --extractor llm --dedup-backend splink
+
+# Neural NLP pipeline for higher precision (all local, no API calls)
+kg-forge ingest --source ~/documents/ --curator docling --extractor spacy --dedup-backend zingg
 ```
 
 ### Domain-Specific Entity Extraction
@@ -513,19 +617,22 @@ kg-forge ingest --source ~/research_docs/ --extractor spacy
 ```
 
 ### Multi-Tenant Experimentation
-Use namespaces to compare extraction strategies:
+Use namespaces to compare different backend combinations:
 ```bash
-# Test different extraction approaches
-kg-forge ingest --source ~/docs/ --namespace llm_experiment --extractor llm
-kg-forge ingest --source ~/docs/ --namespace spacy_experiment --extractor spacy
+# Test different curation and extraction approaches
+kg-forge ingest --source ~/docs/ --namespace docling_llm --curator docling --extractor llm
+kg-forge ingest --source ~/docs/ --namespace hyland_llm --curator hylandKE --extractor llm
+kg-forge ingest --source ~/docs/ --namespace docling_spacy --curator docling --extractor spacy
 
 # Compare results
-kg-forge query list-entities --namespace llm_experiment --type Product
-kg-forge query list-entities --namespace spacy_experiment --type Product
+kg-forge query list-entities --namespace docling_llm --type Product
+kg-forge query list-entities --namespace hyland_llm --type Product
+kg-forge query list-entities --namespace docling_spacy --type Product
 
 # Visualize differences
-kg-forge render --namespace llm_experiment --out llm_graph.html
-kg-forge render --namespace spacy_experiment --out spacy_graph.html
+kg-forge render --namespace docling_llm --out docling_llm_graph.html
+kg-forge render --namespace hyland_llm --out hyland_llm_graph.html
+kg-forge render --namespace docling_spacy --out docling_spacy_graph.html
 ```
 
 ### Interactive Development Workflow

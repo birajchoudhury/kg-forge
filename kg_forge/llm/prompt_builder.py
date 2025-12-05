@@ -63,13 +63,15 @@ class PromptBuilder:
 
 Extract entities and relationships from the provided document according to the entity type definitions below.
 
+**CRITICAL: You must respond with ONLY valid JSON. Do not include any explanatory text, markdown formatting, or commentary before or after the JSON. Your entire response must be parseable JSON.**
+
 **INSTRUCTIONS:**
 1. Only extract entities that match the defined types
 2. Be precise with entity names - use the exact text from the document
 3. Include character offsets (start_offset, end_offset) for each mention
 4. For relationships, identify connections between entities based on the schema
-5. Return results in valid JSON format
-6. If no entities are found, return empty arrays
+5. If no entities are found, return empty arrays
+6. Return ONLY the JSON object - no other text
 
 **ENTITY TYPE DEFINITIONS:**
 
@@ -79,9 +81,7 @@ Extract entities and relationships from the provided document according to the e
 
 {{DOCUMENT_CONTENT}}
 
-**OUTPUT FORMAT:**
-
-Return your results in this exact JSON format:
+**REQUIRED OUTPUT FORMAT (return ONLY this JSON, nothing else):**
 
 {
   "entities": [
@@ -103,9 +103,7 @@ Return your results in this exact JSON format:
       "context": "text showing the relationship"
     }
   ]
-}
-
-Begin extraction:"""
+}"""
     
     def _build_entity_definitions_section(self) -> str:
         """Build the entity definitions section of the prompt.

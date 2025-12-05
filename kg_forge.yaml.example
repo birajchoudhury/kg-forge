@@ -33,3 +33,19 @@ app:
   linking_similarity_threshold: 0.8      # Minimum similarity for linking to existing entities (0.0-1.0)
   linking_max_candidates: 5              # Maximum candidates to consider per entity
   linking_create_missing: true           # Whether to create new entities when no matches found
+  
+  # Hyland Knowledge Enrichment Configuration (Optional)
+  # Obtain credentials from https://admin.experience.hyland.com/
+  hyland_client_id: your_hyland_client_id_here
+  hyland_client_secret: your_hyland_client_secret_here
+  # Optional: Override default endpoints
+  # hyland_api_url: https://knowledge-enrichment.ai.experience.hyland.com/latest/api/data-curation
+  # hyland_oauth_url: https://auth.iam.experience.hyland.com/idp
+  # Optional: Curation options
+  # hyland_curation_options:
+  #   normalization:
+  #     quotations: true
+  #     dashes: true
+  #   chunking: false
+  #   chunk_size: 1000
+  #   embeddings: false

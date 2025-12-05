@@ -99,13 +99,30 @@ class IngestPipeline:
         # Initialize curation backend
         curation_config = {}
         if self.curator == "hylandKE":
-            curation_config['hyland_endpoint'] = getattr(self.config.app, 'hyland_ke_endpoint', None)
-            curation_config['hyland_api_key'] = getattr(self.config.app, 'hyland_ke_api_key', None)
+            # Get credentials from hyland_ke config section
+            curation_config['hyland_client_id'] = getattr(self.config.hyland_ke, 'client_id', None)
+            curation_config['hyland_client_secret'] = getattr(self.config.hyland_ke, 'client_secret', None)
+            curation_config['hyland_api_url'] = getattr(self.config.hyland_ke, 'api_url', None)
+            curation_config['hyland_oauth_url'] = getattr(self.config.hyland_ke, 'oauth_url', None)
+            # Build curation options dict from config
+            curation_options = {
+                'normalization': {
+                    'quotations': getattr(self.config.hyland_ke, 'normalize_quotations', True),
+                    'dashes': getattr(self.config.hyland_ke, 'normalize_dashes', True)
+                },
+                'chunking': getattr(self.config.hyland_ke, 'enable_chunking', False),
+                'chunk_size': getattr(self.config.hyland_ke, 'chunk_size', 1000),
+                'embeddings': getattr(self.config.hyland_ke, 'enable_embeddings', False)
+            }
+            curation_config['hyland_curation_options'] = curation_options
         
         self.curation_backend = create_curation_backend(
             self.curator,
-            hyland_endpoint=curation_config.get('hyland_endpoint'),
-            hyland_api_key=curation_config.get('hyland_api_key')
+            hyland_client_id=curation_config.get('hyland_client_id'),
+            hyland_client_secret=curation_config.get('hyland_client_secret'),
+            hyland_api_url=curation_config.get('hyland_api_url'),
+            hyland_oauth_url=curation_config.get('hyland_oauth_url'),
+            hyland_curation_options=curation_config.get('hyland_curation_options')
         )
         
         # Initialize ontology manager and set active pack

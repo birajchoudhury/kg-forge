@@ -34,6 +34,24 @@ class AWSConfig(BaseModel):
     bedrock_temperature: float = Field(default=0.1)
 
 
+class HylandKEConfig(BaseModel):
+    """Hyland Knowledge Enrichment Data Curation API configuration."""
+    # OAuth 2.0 client credentials (required)
+    client_id: Optional[str] = Field(default=None)
+    client_secret: Optional[str] = Field(default=None)
+    
+    # API endpoints (optional, will use defaults if not specified)
+    api_url: Optional[str] = Field(default=None)
+    oauth_url: Optional[str] = Field(default=None)
+    
+    # Curation options
+    enable_chunking: bool = Field(default=False)
+    chunk_size: int = Field(default=1000)
+    enable_embeddings: bool = Field(default=False)
+    normalize_quotations: bool = Field(default=True)
+    normalize_dashes: bool = Field(default=True)
+
+
 class AppConfig(BaseModel):
     """Application configuration."""
     log_level: str = Field(default="INFO")
@@ -130,6 +148,7 @@ class Settings(BaseModel):
     """Main configuration class."""
     neo4j: Neo4jConfig = Field(default_factory=Neo4jConfig)
     aws: AWSConfig = Field(default_factory=AWSConfig)
+    hyland_ke: HylandKEConfig = Field(default_factory=HylandKEConfig)
     app: AppConfig = Field(default_factory=AppConfig)
 
     @classmethod
@@ -224,6 +243,25 @@ class Settings(BaseModel):
             aws_config["bedrock_temperature"] = float(os.getenv("BEDROCK_TEMPERATURE"))
         if aws_config:
             config["aws"] = aws_config
+
+        # Hyland KE configuration
+        hyland_config = {}
+        if os.getenv("HYLAND_KE_CLIENT_ID"):
+            hyland_config["client_id"] = os.getenv("HYLAND_KE_CLIENT_ID")
+        if os.getenv("HYLAND_KE_CLIENT_SECRET"):
+            hyland_config["client_secret"] = os.getenv("HYLAND_KE_CLIENT_SECRET")
+        if os.getenv("HYLAND_KE_API_URL"):
+            hyland_config["api_url"] = os.getenv("HYLAND_KE_API_URL")
+        if os.getenv("HYLAND_KE_OAUTH_URL"):
+            hyland_config["oauth_url"] = os.getenv("HYLAND_KE_OAUTH_URL")
+        if os.getenv("HYLAND_KE_ENABLE_CHUNKING"):
+            hyland_config["enable_chunking"] = os.getenv("HYLAND_KE_ENABLE_CHUNKING").lower() == "true"
+        if os.getenv("HYLAND_KE_CHUNK_SIZE"):
+            hyland_config["chunk_size"] = int(os.getenv("HYLAND_KE_CHUNK_SIZE"))
+        if os.getenv("HYLAND_KE_ENABLE_EMBEDDINGS"):
+            hyland_config["enable_embeddings"] = os.getenv("HYLAND_KE_ENABLE_EMBEDDINGS").lower() == "true"
+        if hyland_config:
+            config["hyland_ke"] = hyland_config
 
         # App configuration
         app_config = {}

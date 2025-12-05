@@ -13,16 +13,22 @@ logger = logging.getLogger(__name__)
 
 def create_curation_backend(
     backend_name: str = "docling",
-    hyland_endpoint: Optional[str] = None,
-    hyland_api_key: Optional[str] = None
+    hyland_client_id: Optional[str] = None,
+    hyland_client_secret: Optional[str] = None,
+    hyland_api_url: Optional[str] = None,
+    hyland_oauth_url: Optional[str] = None,
+    hyland_curation_options: Optional[dict] = None
 ) -> CurationBackend:
     """
     Factory function to create a curation backend.
     
     Args:
-        backend_name: Backend to use ('docling' or 'hyland_ke'/'hylandKE')
-        hyland_endpoint: Hyland KE API endpoint (only for hyland_ke backend)
-        hyland_api_key: Hyland KE API key (only for hyland_ke backend)
+        backend_name: Backend to use ('docling' or 'hylandKE')
+        hyland_client_id: Hyland OAuth client ID (only for hylandKE backend)
+        hyland_client_secret: Hyland OAuth client secret (only for hylandKE backend)
+        hyland_api_url: Hyland Data Curation API URL (optional, uses default)
+        hyland_oauth_url: Hyland OAuth URL (optional, uses default)
+        hyland_curation_options: Hyland curation options dict (optional)
     
     Returns:
         CurationBackend instance
@@ -32,9 +38,11 @@ def create_curation_backend(
     
     Examples:
         >>> backend = create_curation_backend("docling")
-        >>> backend = create_curation_backend("hyland_ke", 
-        ...     hyland_endpoint="https://api.hyland.com/ke",
-        ...     hyland_api_key="secret-key")
+        >>> backend = create_curation_backend(
+        ...     "hylandKE",
+        ...     hyland_client_id="my-client-id",
+        ...     hyland_client_secret="my-secret"
+        ... )
     """
     backend_name = backend_name.lower()
     
@@ -50,8 +58,11 @@ def create_curation_backend(
     elif backend_name == "hylandke":
         try:
             return HylandKECurationBackend(
-                api_endpoint=hyland_endpoint,
-                api_key=hyland_api_key
+                client_id=hyland_client_id,
+                client_secret=hyland_client_secret,
+                api_url=hyland_api_url,
+                oauth_url=hyland_oauth_url,
+                curation_options=hyland_curation_options
             )
         except Exception as e:
             raise CurationBackendError(
@@ -62,5 +73,5 @@ def create_curation_backend(
     else:
         raise CurationBackendError(
             f"Unknown curation backend: '{backend_name}'. "
-            f"Supported backends: 'docling', 'hyland_ke'"
+            f"Supported backends: 'docling', 'hylandKE'"
         )
