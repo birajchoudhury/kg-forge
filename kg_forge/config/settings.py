@@ -41,6 +41,8 @@ class AppConfig(BaseModel):
     entities_extract_dir: str = Field(default="entities_extract")
     ontology_pack: Optional[str] = Field(default=None)
     ontology_packs_dir: str = Field(default="ontology_packs")
+    output_dir: str = Field(default="output")
+    default_curator: str = Field(default="docling")
     default_extractor: str = Field(default="llm")
     default_dedup_backend: str = Field(default="splink")
     
@@ -70,6 +72,15 @@ class AppConfig(BaseModel):
         if not re.match(r'^[a-zA-Z0-9]+$', v):
             raise ValueError("Namespace must be alphanumeric only (no spaces or special characters)")
         return v
+
+    @field_validator('default_curator')
+    @classmethod
+    def validate_curator(cls, v):
+        """Validate curation backend."""
+        valid_curators = ["docling", "hyland_ke"]
+        if v.lower() not in valid_curators:
+            raise ValueError(f"Curator must be one of {valid_curators}")
+        return v.lower()
 
     @field_validator('default_extractor')
     @classmethod

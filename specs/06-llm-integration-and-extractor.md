@@ -2,9 +2,9 @@
 
 ## Overview
 
-Step 6 introduces a dual extraction architecture with pluggable backends that can extract entities and relations using either LLM-based approaches or NLP/ML pipelines. This step implements both the LLM extraction backend (using AWS Bedrock) and the spaCy lexical graph pipeline (using spaCy + GLiNER + GLiREL) behind a common `ExtractionBackend` interface. The extraction backends produce structured `LexicalGraph` objects containing mentions and relations that will be processed by deduplication and entity linking in subsequent steps.
+Step 6 introduces a dual extraction architecture with pluggable backends that can extract entities and relations using either LLM-based approaches or NLP/ML pipelines. This step implements both the LLM extraction backend (using AWS Bedrock) and the spaCy lexical graph pipeline (using spaCy + GLiNER + GLiREL) behind a common `ExtractionBackend` interface. The extraction backends receive curated text from Step 3's CurationBackend (which processes multiple document formats including HTML, PDF, DOCX, etc.) and produce structured `LexicalGraph` objects containing mentions and relations that will be processed by deduplication and entity linking in subsequent steps.
 
-Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), orchestrate the full ingest pipeline over folders (that's Step 7), perform deduplication/entity resolution (handled by separate DedupBackend), or handle visualization or rendering.
+Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), orchestrate the full ingest pipeline over folders (that's Step 7), perform deduplication/entity resolution (handled by separate DedupBackend), handle document curation (that's Step 3), or handle visualization or rendering.
 
 ## Scope
 
@@ -12,13 +12,14 @@ Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), o
 
 - Implement **ExtractionBackend interface**:
   - Common protocol for both LLM and spaCy-based extraction
-  - Input: curated document content + ontology pack
+  - Input: curated text from Step 3's CurationBackend (format-agnostic: can be from HTML, PDF, DOCX, etc.) + ontology pack
   - Output: structured `LexicalGraph` with mentions and relations
 - Implement **LLM Extraction Backend**:
   - Prompt builder using entity definitions and templates
   - AWS Bedrock client using LlamaIndex integration
   - Parse LLM JSON responses into `LexicalMention` and `LexicalRelation` objects
   - Error handling, retry logic, and consecutive failure tracking
+  - Works with curated text regardless of source document format
 - Implement **spaCy Lexical Graph Backend**:
   - spaCy pipeline for tokenization, sentences, and document structure
   - GLiNER integration for named entity recognition with ontology-aligned labels
@@ -40,6 +41,7 @@ Step 6 explicitly does NOT write anything to Neo4j (no graph persistence yet), o
 
 ### Out of Scope
 
+- Document curation and format conversion (handled by Step 3 CurationBackend)
 - Writing to Neo4j or creating `:Doc` / `:Entity` nodes (covered in Step 7)
 - Walking folder trees and orchestrating ingest over many files (that's Step 7)
 - Entity deduplication, resolution, or canonicalization (handled by separate DedupBackend)
@@ -121,10 +123,11 @@ from typing import Protocol
 class ExtractionBackend(Protocol):
     def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
         """
-        Extract mentions and relations from curated text.
+        Extract entities and relations from curated text.
         
         Args:
-            content: Curated document text
+            content: Curated text from CurationBackend (format-agnostic: 
+                    could be from HTML, PDF, DOCX, or any other format processed by Step 3)
             ontology: Entity definitions and templates
             
         Returns:
@@ -329,7 +332,7 @@ kg-forge extract-test [OPTIONS] INPUT
 
 #### Arguments and Options
 
-- `INPUT`: Path to text file containing curated document content
+- `INPUT`: Path to text file containing curated document content (can be curated text from any source format: HTML, PDF, DOCX, etc.)
 - `--backend [llm|spacy|both]`: Extraction backend to use (default: both)
 - `--model TEXT`: Override Bedrock model name for LLM backend
 - `--fake-backends`: Use fake/mock backends for testing
@@ -341,14 +344,14 @@ kg-forge extract-test [OPTIONS] INPUT
 #### Example Usage
 
 ```bash
-# Compare both backends
+# Compare both backends on curated text (could be from any document format)
 kg-forge extract-test sample_doc.txt
 
-# Test only LLM backend
-kg-forge extract-test sample_doc.txt --backend llm
+# Test extraction on curated text from PDF
+kg-forge extract-test curated_from_pdf.txt --backend llm
 
-# Test only spaCy backend
-kg-forge extract-test sample_doc.txt --backend spacy
+# Test on curated text from HTML
+kg-forge extract-test curated_from_html.txt --backend spacy
 
 # Use mock backends for testing
 kg-forge extract-test sample_doc.txt --fake-backends

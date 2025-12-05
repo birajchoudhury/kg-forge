@@ -21,7 +21,7 @@ logger = get_logger(__name__)
     "--source", 
     required=True,
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    help="Root directory containing HTML files to process"
+    help="Root directory containing document files to process"
 )
 @click.option(
     "--namespace", 
@@ -57,6 +57,11 @@ logger = get_logger(__name__)
     help="Limit number of documents processed (for debugging)"
 )
 @click.option(
+    "--curator",
+    type=click.Choice(["docling", "hyland_ke"], case_sensitive=False),
+    help="Curation backend for multi-format document processing (default from config)"
+)
+@click.option(
     "--extractor",
     type=click.Choice(["llm", "spacy"], case_sensitive=False),
     help="Extraction backend (default from config)"
@@ -80,22 +85,23 @@ def ingest(
     prompt_template: Optional[Path] = None,
     model: Optional[str] = None,
     max_docs: Optional[int] = None,
+    curator: Optional[str] = None,
     extractor: Optional[str] = None,
     dedup_backend: Optional[str] = None,
     fake_llm: bool = False
 ) -> None:
     """
-    Ingest HTML files from source directory into knowledge graph.
+    Ingest document files from source directory into knowledge graph.
     
     This command runs the complete ingest pipeline:
-    1. Discovers HTML files in source directory
-    2. Parses HTML to curated documents 
+    1. Discovers document files (HTML, PDF, DOCX, PPTX) in source directory
+    2. Curates documents to markdown using configurable backend
     3. Extracts entities using configurable backend (LLM or spaCy)
     4. Applies deduplication using configurable backend (Splink/Zingg/none)
     5. Stores documents and entities in Neo4j
     6. Creates relationships between entities
     
-    SOURCE: Root directory containing HTML files to process
+    SOURCE: Root directory containing document files to process
     """
     
     try:
@@ -120,6 +126,8 @@ def ingest(
             console.print("[yellow]Mode: REFRESH (reprocess all documents)[/yellow]")
         if interactive:
             console.print("[cyan]Mode: INTERACTIVE (hooks enabled)[/cyan]")
+        if curator:
+            console.print(f"Curator: {curator}")
         if fake_llm:
             console.print("[cyan]LLM: FAKE (testing mode)[/cyan]")
         elif model:
@@ -139,6 +147,7 @@ def ingest(
             prompt_template=prompt_template,
             model=model,
             max_docs=max_docs,
+            curator=curator,
             extractor=extractor,
             dedup_backend=dedup_backend,
             fake_llm=fake_llm,
@@ -183,9 +192,14 @@ def _display_results(metrics, dry_run: bool) -> None:
     table.add_column("Count", style="green")
     
     table.add_row("Files Discovered", str(metrics.files_discovered))
+    table.add_row("Documents Curated", str(metrics.docs_curated))
+    table.add_row("Curation Failed", str(metrics.curation_failed))
     table.add_row("Documents Processed", str(metrics.docs_processed))
     table.add_row("Documents Skipped", f"{metrics.docs_skipped} (unchanged)")
     table.add_row("Documents Failed", str(metrics.docs_failed))
+    table.add_row("Entities Extracted", str(metrics.entities_extracted))
+    table.add_row("Entities Deduped", str(metrics.entities_deduped))
+    table.add_row("Entities Linked", str(metrics.entities_linked))
     table.add_row("Entities Created", str(metrics.entities_created))
     table.add_row("Entities Updated", str(metrics.entities_updated))
     table.add_row("MENTIONS Created", str(metrics.mentions_created))
@@ -196,6 +210,7 @@ def _display_results(metrics, dry_run: bool) -> None:
     # Performance metrics
     console.print(f"\n[bold]Performance:[/bold]")
     console.print(f"  Total Time: {metrics.processing_time:.1f}s")
+    console.print(f"  Curation Time: {metrics.curation_time:.1f}s")
     console.print(f"  LLM Time: {metrics.llm_time:.1f}s")
     console.print(f"  Neo4j Time: {metrics.neo4j_time:.1f}s") 
     console.print(f"  Success Rate: {metrics.success_rate:.1f}%")

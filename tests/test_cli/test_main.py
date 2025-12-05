@@ -59,7 +59,7 @@ def test_ingest_help():
     result = runner.invoke(cli, ['ingest', '--help'])
     
     assert result.exit_code == 0
-    assert "Ingest HTML files" in result.output
+    assert "Ingest document files" in result.output
     assert "--source" in result.output
 
 

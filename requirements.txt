@@ -15,6 +15,12 @@ llama-index-llms-bedrock>=0.3.0
 boto3>=1.34.0
 botocore>=1.34.0
 
+# Version compatibility notes:
+# - numpy must be <2.0.0 for spacy/thinc compatibility
+# - opencv-python must be <4.12.0 to work with numpy<2.0.0
+# - docling 2.x works with numpy 1.26.x despite preferring 2.x
+numpy>=1.19.0,<2.0.0
+
 # spaCy Extraction (for lexical graph pipeline) - using pre-compiled version to avoid build issues
 spacy>=3.6.0,<3.8.0
 
@@ -29,6 +35,11 @@ zingg>=0.4.0  # Real Zingg ML-based entity resolution
 pyspark>=3.4.0  # Required for Zingg
 pandas>=1.5.0
 duckdb
+
+# Document Curation (multi-format processing)
+docling>=1.0.0
+docling-core>=1.0.0
+opencv-python>=4.8.0,<4.12.0  # Compatible with numpy<2.0.0
 
 # Graph Rendering
 jinja2>=3.0.0

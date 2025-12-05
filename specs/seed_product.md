@@ -53,7 +53,7 @@ We need a **fast, experimental way** to:
 
 Build a **CLI-based experimentation toolbox** (“KG Forge”) that lets us:
 
-1. **Ingest** unstructured content from a filesystem export (initially Confluence HTML).
+1. **Ingest** unstructured content from a filesystem export.
 2. **Extract entities and topics** using **pluggable extraction backends**:
    - an LLM-based pipeline driven by markdown definitions, and
    - a spaCy + GLiNER + GLiREL lexical graph pipeline.
@@ -95,8 +95,8 @@ It is **not** a production service; it is an **experiment platform** that helps 
 
 ### 3.2 Core Use Cases
 
-1. **Bootstrap a knowledge graph from Confluence**
-   - Export a space as HTML.
+1. **Bootstrap a knowledge graph from documents**
+   - Export content as HTML, gather PDF documents, or use other document formats.
    - Run `kg-forge ingest` to extract entities, deduplicate them, and create a graph in Neo4j.
    - Use `kg-forge query` and `kg-forge render` to explore relationships.
 
@@ -135,16 +135,19 @@ It is **not** a production service; it is an **experiment platform** that helps 
 
 ## 4. Scope for v1
 
-v1 is a **single-machine CLI tool** focused on one primary source (filesystem HTML export) and one primary graph backend (Neo4j).
+v1 is a **single-machine CLI tool** focused on Filesystem folder of documents and one primary graph backend (Neo4j).
 
 ### 4.1 In-Scope
 
 - **Source**
-  - Filesystem folder of HTML pages (Confluence export).
+  - Filesystem folder of documents including:
+    - HTML pages (Confluence export)
+    - PDF documents
+    - Other document formats (extensible architecture)
 
 - **Core Commands**
   - `ingest`
-    - Read and curate text from HTML.
+    - Read and curate text from various document formats (HTML, PDF, etc.).
     - Extract entities/topics (and relations) using a selected extraction backend:
       - `--extractor llm` (LLM-based),
       - `--extractor spacy` (spaCy + GLiNER + GLiREL).
@@ -205,7 +208,6 @@ v1 is a **single-machine CLI tool** focused on one primary source (filesystem HT
 - Real-time ingestion from live Confluence or other systems.
 - UI-based ontology editor (only markdown + CLI visualizations for now).
 - Advanced GraphRAG or natural language graph querying on top of the KG.
-- Non-HTML sources (PDF, Word, etc.).
 - Large-scale distributed entity resolution using Zingg (planned for later iterations).
 - Managed Content Lake integration as a primary storage (filesystem-only in v1).
 
@@ -215,7 +217,7 @@ v1 is a **single-machine CLI tool** focused on one primary source (filesystem HT
 
 ### 5.1 Document
 
-- One curated unit of content (initially: one HTML page).
+- One curated unit of content.
 - Identified by a stable `doc_id` derived from file path.
 - Represented in the graph as a `:Doc` node.
 - Has relationships to entities it mentions (and optionally additional metadata).
@@ -264,7 +266,7 @@ The system is responsible for:
 
 ### 6.1 Ingest
 
-- As a user, I can run `kg-forge ingest` on a folder of HTML files and:
+- As a user, I can run `kg-forge ingest` on a folder of documents (HTML, PDF, etc.) and:
   - see how many documents were processed, skipped, or failed,
   - see a summary of entities created/updated per entity type,
   - know which namespace was affected.

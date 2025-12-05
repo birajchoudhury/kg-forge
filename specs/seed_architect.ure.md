@@ -26,7 +26,7 @@ The system is designed as an **experimental playground** to learn:
 A **Python CLI tool** with three primary subcommands:
 
 - `ingest`
-  - curate content from HTML,
+  - curate content from multiple document formats (HTML, PDF, etc.) using a configurable curation backend,
   - **run one of two extraction pipelines** to form a lexical graph from the extracted entities and relations:
     - **LLM-based**, or
     - **spaCy + GLiNER + GLiREL** (lexical graph),
@@ -50,11 +50,12 @@ The system should provide a **simple end-to-end pipeline** so we can focus on:
 
 For this project:
 
-- `ingest` source = **filesystem** with folders and HTML pages  
-  (e.g. a **Confluence site HTML export**).
+- `ingest` source = **filesystem** with folders containing various document formats  
+  (e.g. HTML from **Confluence site export**, PDFs, etc.).
 
-The user can choose the extraction mode at runtime:
+The user can choose the curation and extraction modes at runtime:
 
+--curator [docling|hylandKE] (default docling)
 --extractor [llm|spacy] (default llm)
 
 For the first step, we want **basic implementations** with minimal external dependencies:
@@ -112,6 +113,9 @@ The architecture must therefore be **modular**, with clear boundaries so that:
 - **CLI:** `click`
 - **Graph DB:** Neo4j (official Python driver)
 - **Graph Visualization:** `vis.js` (via generated HTML)
+- **Document Curation:**
+  - **Docling** (multi-format document processing and conversion to markdown),
+  - **Hyland KE** (future: curated content API integration).
 - **LLM & KG Integration:** **LlamaIndex**
   - Use LlamaIndex **KnowledgeGraphIndex** plugged into Neo4j where helpful.
   - Use LlamaIndex **Bedrock client** for LLM calls.
@@ -132,6 +136,7 @@ Parameters such as:
 - Bedrock credentials (access keys / region),
 - Neo4j location & credentials,
 - Bedrock model name,
+- **Curator backend** (docling or hylandKE),
 - **Extractor mode** (llm or spacy),
 - **Dedup backend** (none, splink, zingg, both/ensemble),
 are provided via a `.env` file.
@@ -146,16 +151,21 @@ are provided via a `.env` file.
 ### 3.1 Pipeline Overview
 
 1. **Ingestion Source**
-   - Read from a folder of HTML files and subfolders.
-   - Typically a Confluence HTML export.
+   - Read from a folder of documents (HTML, PDF, etc.) and subfolders.
+   - Automatically detect file format based on extension and content.
 
-2. **Curation (HTML → Curated Text)**
-   - Convert HTML to markdown-ish text:
-     - Keep visible HTML text, headings, and list items.
-     - Remove elements with CSS classes:
-       - `header`, `sidebar`, `nav`, and Confluence export boilerplate.
+2. **Curation (Document → Markdown → Curated Text)**
+   - Use a configurable **CurationBackend** (`--curator` flag):
+     - **Docling** (default): Multi-format document processor
+       - Converts documents (HTML, PDF, DOCX, etc.) to markdown
+       - Extracts clean text with structure preservation
+       - Saves markdown to `output/markdowns/<namespace>/<doc_id>.md`
+     - **HylandKE** (future): Curated content API integration
+   - Output:
+     - **Markdown file**: Saved to disk for provenance and review
+     - **Curated text**: Clean text string used by extraction backends
    - **Chunking**:
-     - Start with **one page = one chunk** (one `Doc` node per HTML page).
+     - Start with **one file = one chunk** (one `Doc` node per document file).
 
 3. **Ontology / Entity-Type Loading**
    - Load entity & topic definitions from `entities_extract/*.md` (see §4).
@@ -259,8 +269,38 @@ are provided via a `.env` file.
   --dedup none/splink/zingg/both.
    - Observe impact in Neo4j & rendered graph.
 
-## 3.2 Extraction Pipelines as Backends
+## 3.2 Curation and Extraction as Pluggable Backends
 
+### 3.2.1 CurationBackend
+
+We treat document curation as a pluggable backend behind a common interface.
+
+Conceptually:
+
+```python
+class CurationBackend(Protocol):
+    def curate(self, file_path: str, namespace: str) -> CurationResult:
+        """Process a document file and return markdown + curated text.
+        
+        Args:
+            file_path: Path to source document
+            namespace: Current namespace for organizing outputs
+            
+        Returns:
+            CurationResult with:
+                - curated_text: Clean text for extraction
+                - markdown_content: Full markdown representation
+                - markdown_path: Where markdown was saved
+                - metadata: Format, page count, etc.
+        """
+```
+
+Implementations:
+
+- **DoclingCurationBackend**: Uses Docling library for multi-format processing (HTML, PDF, DOCX, etc.)
+- **HylandKECurationBackend** (future): Integration with Hyland curated content API
+
+### 3.2.2 ExtractionBackend
 
 We treat the extraction + lexical graph building as backends behind a common interface.
 A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
@@ -270,8 +310,8 @@ Conceptually:
 ```python
 class ExtractionBackend(Protocol):
     def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
-        """Produce a LexicalGraph (mentions + relations) from curated text."""```
-
+        """Produce a LexicalGraph (mentions + relations) from curated text."""
+```
 
 Implementations:
 
@@ -282,7 +322,17 @@ A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a D
 
 ## 3.3 Core In-Memory Data Models
 
-These types are used by the extraction, deduplication, and linking steps. They are in-memory models; only some of their information is ultimately persisted to Neo4j.
+These types are used by the curation, extraction, deduplication, and linking steps. They are in-memory models; only some of their information is ultimately persisted to Neo4j.
+
+### 3.3.0 `CurationResult`
+
+The output of a `CurationBackend` for a single document.
+
+- `curated_text`: string (clean text suitable for extraction backends)
+- `markdown_content`: string (full markdown representation of document)
+- `markdown_path`: string (absolute path where markdown was saved)
+- `metadata`: dict  
+  Examples: source_format ("html", "pdf", etc.), page_count, curation_backend, timestamp, file_size.
 
 ### 3.3.1 `LexicalMention`
 
@@ -650,7 +700,7 @@ We use a **simple property graph schema** with two primary node types and a few 
 
 #### 7.1.1 :Doc
 
-Represents an ingested document. In v1, one HTML page = one Doc.
+Represents an ingested document. In v1, one document file = one Doc.
 
 Label
 
@@ -659,13 +709,21 @@ Label
 Required properties
 
 - namespace – string, experiment/environment name (e.g. "default").
-- doc_id – string, stable ID (e.g. relative path without extension, lowercased).
+- doc_id – string, stable ID including format (e.g. "platform/kd/intro.html", "platform/kd/intro.pdf").
 - source_path – string, relative file path (e.g. "platform/kd/intro.html").
+- source_format – string, document format (e.g. "html", "pdf", "docx").
 - content_hash – string, MD5 of curated text (used to skip unchanged docs).
+
+Optional properties
+
+- markdown_path – string, path to saved markdown representation.
+- page_count – int, number of pages (for paginated formats like PDF).
 
 Merge key
 
 - (namespace, doc_id)
+
+Note: doc_id includes the file extension to allow same logical document in different formats to coexist.
 
 #### 7.1.2 :Entity
 
@@ -787,8 +845,8 @@ Common options:
 
 Responsibilities:
 
-- Read HTML files from a folder,
-- Curate text from HTML,
+- Read document files from a folder (HTML, PDF, etc.),
+- Curate documents to markdown and text using selected curation backend,
 - Run extraction via selected backend (llm or spacy; KE backend planned for later),
 - Run deduplication (if configured),
 - Run entity linking,
@@ -798,13 +856,15 @@ Responsibilities:
 Options:
 
 - --source PATH (required)
-  - Folder containing HTML files.
+  - Folder containing document files (HTML, PDF, DOCX, etc.).
 - --namespace TEXT (default "default")
+- --curator [docling|hylandKE] (default docling)
+  - Selects curation backend for document processing.
 - --refresh (flag)
   - If not set:
     - skip re-import when content_hash is unchanged.
 - --dry-run (flag)
-  - Run extraction but **do not write** to the graph.
+  - Run curation and extraction but **do not write** to the graph.
   - Useful for ontology/prompt tweaks.
 - --prompt-template PATH
   - Override default entities_extract/prompt_template.md.
@@ -818,10 +878,17 @@ Options:
 
 Behaviour:
 
-- For each HTML file under --source:
+- For each document file under --source:
+  - Detect file format (based on extension: .html, .pdf, .docx, etc.).
   - Compute doc_id as:
-    - sub-path + filename, lower case, without extension.
-  - Curate HTML to text.
+    - sub-path + filename with extension, lower case.
+    - Example: "platform/kd/intro.html" or "platform/kd/intro.pdf"
+  - Run selected CurationBackend:
+    - Process document → markdown + curated text.
+    - Save markdown to `output/markdowns/<namespace>/<doc_id>.md`.
+    - On curation failure:
+      - Log error with file path and reason.
+      - Skip document and continue with next file.
   - Compute MD5 content_hash on curated text.
   - If a :Doc already exists with same (namespace, doc_id, content_hash):
     - and --refresh is not provided → skip.
@@ -832,10 +899,12 @@ Behaviour:
     - Run EntityLinkerBackend → mapping of canonical lexical entities → KG entities.
     - call process_before_store,
     - Create/merge :Doc, :Entity, :MENTIONS, and :RELATION edges in Neo4j.
+    - Include source_format, markdown_path in :Doc properties.
     - collect entities for batch summary.
 
 - After all docs:
   - call process_after_batch with list of entities, kg_client
+  - Log summary including: total files, processed, skipped (unchanged), failed (curation errors)
 
 ### 8.3 query Command
 
@@ -927,27 +996,55 @@ Behaviour:
 
 ## 9. Ingestion & Curation Details
 
-### 9.1 Basic HTML → Text Rules
+### 9.1 Multi-Format Document Processing
 
-- Use an HTML parser to:
-  - keep:
-    - visible text,
-    - headings,
-    - list items.
-  - drop:
-    - elements with CSS classes:
-      - header,
-      - sidebar,
-      - nav,
-      - Confluence export boilerplate.
+#### 9.1.1 Docling Backend (Default)
 
-- Output:
-  - curated text suitable as input to the extraction backends (LLM or spacy pipeline),
-  - minimal noise.
+Docling processes multiple document formats:
 
-### 9.2 Chunking
+- **Supported formats**: HTML, PDF, DOCX, PPTX, and more
+- **Processing**:
+  - Automatic format detection
+  - Structure-aware conversion to markdown:
+    - Preserves headings, lists, tables
+    - Extracts text with minimal noise
+    - Handles multi-column layouts, footnotes, etc.
+  - Generates clean curated text for extraction
 
-- Start with **one page = one chunk = one Doc**.
+- **Output**:
+  - Markdown file saved to `output/markdowns/<namespace>/<doc_id>.md`
+  - Curated text string (cleaned, ready for extraction backends)
+  - Metadata (format, page count, processing stats)
+
+- **Error handling**:
+  - Log failures with file path and error reason
+  - Skip failed documents and continue processing
+  - Track failure count in batch summary
+
+#### 9.1.2 HylandKE Backend (Future)
+
+Integration with Hyland curated content API:
+
+- API-based document processing
+- Enterprise-grade curation with advanced features
+- Same output contract as Docling backend
+
+### 9.2 Document ID Generation
+
+- **Format**: `<relative_path_with_extension_lowercase>`
+- **Examples**:
+  - `docs/platform/intro.html`
+  - `docs/platform/intro.pdf`
+  - `reports/q4/summary.docx`
+
+- **Rationale**:
+  - Including extension allows same logical document in different formats to coexist
+  - Different formats may have different content/curation results
+  - Clear provenance of source format
+
+### 9.3 Chunking
+
+- Start with **one file = one chunk = one Doc**.
 - No semantic chunking / splitting in v1.
 - This assumption simplifies the schema and pipeline.
 
@@ -1030,11 +1127,27 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 
 ### Step 3 – Data Curation
 
-- Implement HTML → curated text logic.
-- Generate test HTML in tests/data.
-- Add tests to verify:
-  - unwanted elements are removed,
-  - visible text, headings, lists are preserved.
+- Implement CurationBackend interface and protocol.
+- Implement DoclingCurationBackend:
+  - Multi-format document processing (HTML, PDF, DOCX, etc.)
+  - Automatic format detection based on file extension
+  - Markdown generation and storage to `output/markdowns/<namespace>/<doc_id>.md`
+  - Curated text extraction for downstream processing
+  - Error handling: log and skip failed documents
+- Add Docling dependency to requirements.txt.
+- Generate test documents in tests/data:
+  - HTML files (Confluence-style)
+  - PDF files (multi-page, various layouts)
+  - DOCX files (structured documents)
+- Add comprehensive tests:
+  - Format detection accuracy
+  - Markdown generation quality
+  - Curated text extraction (text is clean, structure preserved)
+  - Error handling (corrupted files, unsupported formats)
+  - Namespace-based markdown organization
+  - CurationResult model validation
+- Add CLI flag --curator to select backend (default: docling).
+- Stub HylandKECurationBackend for future implementation.
 
 ### Step 4 – Load Entity Definitions
 

@@ -2,15 +2,16 @@
 
 ## Overview
 
-Step 7 implements the end-to-end ingest pipeline that orchestrates all previous components into a complete workflow with dual extraction and deduplication capabilities. The pipeline discovers HTML files under a source folder, runs curation to produce canonical documents (Step 3), uses configurable extraction backends from Step 6 (LLM or spaCy), applies entity resolution via configurable deduplication backends (Splink/Zingg), performs entity linking to existing KG entities, and writes `:Doc` and `:Entity` nodes and relationships into Neo4j according to the schema (Step 5). This is the first step that runs the full path from filesystem → extraction → deduplication → linking → graph, focusing on correctness, configurability, and hooks integration (`process_before_store`, `process_after_batch`). Step 7 does NOT handle graph visualization (that's Step 8).
+Step 7 implements the end-to-end ingest pipeline that orchestrates all previous components into a complete workflow with multi-format document support, dual extraction, and deduplication capabilities. The pipeline discovers document files (HTML, PDF, DOCX, etc.) under a source folder, runs curation via configurable CurationBackend from Step 3 to produce markdown and curated text, uses configurable extraction backends from Step 6 (LLM or spaCy), applies entity resolution via configurable deduplication backends (Splink/Zingg), performs entity linking to existing KG entities, and writes `:Doc` and `:Entity` nodes and relationships into Neo4j according to the schema (Step 5). This is the first step that runs the full path from filesystem → curation → extraction → deduplication → linking → graph, focusing on correctness, configurability, and hooks integration (`process_before_store`, `process_after_batch`). Step 7 does NOT handle graph visualization (that's Step 8).
 
 ## Scope
 
 ### In Scope
 
 - Implement the ingestion pipeline that:
-  - Walks the `--source` directory to discover HTML files
-  - Loads and curates HTML files into the document model (Step 3)
+  - Walks the `--source` directory to discover document files (HTML, PDF, DOCX, etc.)
+  - Uses configurable CurationBackend (Step 3) to process documents into markdown and curated text
+  - Saves markdown files to `output/markdowns/<namespace>/<doc_id>.md`
   - For each curated document, runs configurable extraction backend (Step 6) to produce LexicalGraph
   - Applies configurable deduplication backend (Splink/Zingg/none) to produce DedupedLexicalGraph
   - Runs entity linking to map canonical entities to existing KG entities
@@ -18,19 +19,26 @@ Step 7 implements the end-to-end ingest pipeline that orchestrates all previous 
   - Upserts `:Doc` and `:Entity` nodes in Neo4j and creates:
     - `(:Doc)-[:MENTIONS]->(:Entity)` relationships
     - Ontology-driven `(:Entity)-[:RELATION]->(:Entity)` relationships
+  - Includes `source_format`, `markdown_path`, `page_count` in `:Doc` node properties
   - Applies `process_after_batch` hook at the end of a batch or ingest run
 - Implement full semantics for `kg-forge ingest` options:
   - `--source`, `--namespace`, `--dry-run`, `--refresh`
+  - `--curator` (docling|hylandKE) - selects document curation backend
   - `--prompt-template`, `--model` (for LLM backend)
   - `--extractor` (llm|spacy), `--dedup-backend` (none|splink|zingg|both)
 - Implement **content hashing** and **idempotent ingest**:
   - Compute MD5 of curated text per document
   - Skip re-import if hash unchanged (unless `--refresh` is set)
+- Handle curation failures gracefully:
+  - Log curation errors with file path and reason
+  - Skip failed documents and continue processing
+  - Track curation failure count in batch summary
 - Integrate extraction error-handling rules from Step 6 into batch ingest:
   - Per-document failures are skipped with logging
   - Backend-specific consecutive failure tracking and abort logic
-- Implement comprehensive ingest metrics (docs processed, entities extracted/deduplicated/linked)
+- Implement comprehensive ingest metrics (docs curated, docs processed, entities extracted/deduplicated/linked, curation failures)
 - End-to-end tests using:
+  - Fake curation backends from Step 3
   - Fake extraction backends from Step 6
   - Mock deduplication backends
   - Docker-based Neo4j fixture from Step 5
@@ -49,13 +57,24 @@ Step 7 implements the end-to-end ingest pipeline that orchestrates all previous 
 
 ## Step Integration
 
+### Inputs from Step 3 (Document Curation)
+
+Step 7 depends on Step 3 providing:
+- **CurationBackend**: Pluggable backend interface (Docling or HylandKE)
+- **CurationResult**: Output model with curated_text, markdown_content, markdown_path, metadata
+- **Multi-Format Support**: Ability to process HTML, PDF, DOCX, and other formats
+- **Format Detection**: Automatic detection of document format from file extension
+- **Markdown Storage**: Organized storage in `output/markdowns/<namespace>/`
+- **Error Handling**: Graceful handling of curation failures
+
 ### Inputs from Step 5 (Neo4j Bootstrap)
 
 Step 7 depends on Step 5 providing:
 - **Neo4jClient**: Configured database connection with proper credentials and URI
 - **Database Schema**: Initialized `:Doc` and `:Entity` node types with constraints and indexes
+- **Updated :Doc Schema**: Support for `source_format`, `markdown_path`, `page_count` properties
 - **Merge Key Constraints**: 
-  - `:Doc` nodes: `(namespace, doc_id)` uniqueness constraint
+  - `:Doc` nodes: `(namespace, doc_id)` uniqueness constraint (doc_id includes extension)
   - `:Entity` nodes: `(namespace, entity_type, normalized_name)` uniqueness constraint
 - **Graph Database**: Empty or existing Neo4j database ready for content ingestion
 - **Test Infrastructure**: Docker-based Neo4j fixture for testing
@@ -75,27 +94,39 @@ This specification implements Step 7c (Pipeline Wiring) which orchestrates:
 - Process: Matches canonical entities against existing Neo4j KG entities
 
 **Step 7c (Pipeline Wiring) - This specification:**
-- Input: All outputs from Steps 3, 5, and 6
+- Input: All outputs from Steps 3 (curation), 5 (Neo4j), and 6 (extraction)
 - Output: Fully populated Neo4j Knowledge Graph ready for Step 8 visualization
-- Process: End-to-end orchestration from HTML → extraction → deduplication → linking → storage
+- Process: End-to-end orchestration from multi-format documents → curation → extraction → deduplication → linking → storage
 
 ## Pipeline Design
 
 The ingest pipeline follows this sequence:
 
 1. **Configuration Resolution**: Load settings from Step 0 and merge CLI options with precedence
-2. **Backend Initialization**: Initialize extraction backend (`--extractor`) and dedup backend (`--dedup-backend`)
-3. **File Discovery**: Walk `--source` directory recursively, filtering for `.html` files with stable ordering
-4. **Per-Document Processing**: For each HTML file:
-   - Derive `doc_id` from relative path (without extension, normalized)
+2. **Backend Initialization**: 
+   - Initialize curation backend (`--curator`: docling or hylandKE)
+   - Initialize extraction backend (`--extractor`: llm or spacy)
+   - Initialize dedup backend (`--dedup-backend`: none, splink, zingg, or both)
+3. **File Discovery**: Walk `--source` directory recursively, discovering all supported document files with stable ordering
+   - Support multiple formats: `.html`, `.pdf`, `.docx`, `.pptx`, etc.
+   - Filter based on file extension
+4. **Per-Document Processing**: For each document file:
+   - Detect file format based on extension
+   - Derive `doc_id` from relative path **including extension** (e.g., "platform/intro.html", "platform/intro.pdf")
    - Extract `source_path`, apply `namespace` from config/CLI
-   - Run HTML → curated text transformation using Step 3's document loader
+   - **Curation Phase**: Call configured CurationBackend:
+     - Process document \u2192 markdown + curated text
+     - Save markdown to `output/markdowns/<namespace>/<doc_id>.md`
+     - On curation failure:
+       - Log error with file path and reason
+       - Skip document and continue with next file
+       - Increment curation failure counter
    - Compute `content_hash` (MD5) over curated text content
    - Check Neo4j for existing `:Doc` with same `(namespace, doc_id, content_hash)`:
-     - If found and `--refresh` is NOT set → skip document (log as "unchanged")
-     - If not found or `--refresh` is set → continue processing
+     - If found and `--refresh` is NOT set \u2192 skip document (log as "unchanged")
+     - If not found or `--refresh` is set \u2192 continue processing
    - **Extraction Phase**: Call configured ExtractionBackend with:
-     - Curated text content
+     - Curated text content (format-agnostic)
      - Ontology pack from Step 4
    - Receive `LexicalGraph` (mentions + relations) or handle failures:
      - Apply backend-specific retry & failure counter logic from Step 6
@@ -107,11 +138,13 @@ The ingest pipeline follows this sequence:
      - Pass canonical entities to EntityLinkerBackend
      - Receive `LinkResult` objects mapping to existing KG entities
    - Run `process_before_store` hook with:
-     - Original curated content (ParsedDocument object)
+     - Original curated content (CurationResult)
      - LexicalGraph or DedupedLexicalGraph
      - Neo4j client instance
    - Write to Neo4j (if not `--dry-run`):
-     - Upsert `:Doc` node with content hash and metadata
+     - Upsert `:Doc` node with:
+       - content_hash, source_format, markdown_path, page_count (from CurationResult metadata)
+       - Standard properties: namespace, doc_id, source_path
      - Create/merge `:Entity` nodes for canonical entities
      - Create `(:Doc)-[:MENTIONS]->(:Entity)` relationships
      - Create typed entity-entity relationships from relations
@@ -120,7 +153,12 @@ The ingest pipeline follows this sequence:
    - Call `process_after_batch` hook with:
      - List of all entities created/updated in this run
      - Neo4j client instance
-   - Log comprehensive metrics summary with pipeline stage breakdowns
+   - Log comprehensive metrics summary with pipeline stage breakdowns:
+     - Total files discovered
+     - Curation: successful, failed, skipped (unchanged)
+     - Extraction: successful, failed
+     - Documents written to Neo4j
+     - Entities created/updated
 
 ### Batching Strategy
 
@@ -726,17 +764,20 @@ kg-forge ingest --source <path> [options]
 ### Example Usage
 
 ```bash
-# Basic ingest with default configuration
-kg-forge ingest --source ./confluence_export
+# Basic ingest with default configuration (Docling curator, LLM extractor)
+kg-forge ingest --source ./documents
+
+# Ingest PDF documents using Docling
+kg-forge ingest --source ./pdfs --curator docling
 
 # Dry run to test without database writes
 kg-forge ingest --source ./test_data --dry-run --fake-llm
 
-# Refresh all documents with custom model
-kg-forge ingest --source ./docs --refresh --model anthropic.claude-3-sonnet
+# Refresh all documents with custom model and spaCy extractor
+kg-forge ingest --source ./docs --refresh --extractor spacy
 
-# Interactive mode with custom namespace
-kg-forge ingest --source ./export --namespace "team_docs" --interactive
+# Multi-format ingest with custom namespace
+kg-forge ingest --source ./export --namespace "team_docs" --curator docling
 
 # Debug mode with document limit
 kg-forge ingest --source ./large_export --max-docs 10 --dry-run
@@ -782,34 +823,38 @@ tests/
 ├── test_ingest/
 │   ├── __init__.py
 │   ├── test_ingest_single_doc.py    # Single document processing
+│   ├── test_ingest_multi_format.py  # Multi-format document processing (HTML, PDF, DOCX)
+│   ├── test_ingest_curation.py      # Curation backend integration
 │   ├── test_ingest_idempotency.py   # Hash-based skipping behavior
 │   ├── test_ingest_dry_run.py       # Dry run mode validation
-│   ├── test_ingest_error_handling.py # LLM failures and recovery
+│   ├── test_ingest_error_handling.py # Curation/extraction failures and recovery
 │   ├── test_ingest_hooks.py         # Hook integration testing
 │   ├── test_ingest_metrics.py       # Metrics collection and reporting
 │   └── test_filesystem.py          # File discovery utilities
 ├── test_cli/
 │   └── test_ingest_cli.py           # End-to-end CLI command testing
 └── data/
-    └── html/
+    └── documents/
         ├── sample_space/
-        │   ├── page1.html           # Simple Confluence export
-        │   ├── page2.html           # Page with multiple entities
+        │   ├── page1.html           # Simple HTML document
+        │   ├── report.pdf           # PDF document
+        │   ├── doc.docx            # Word document
         │   └── nested/
         │       └── page3.html       # Nested directory structure
         └── malformed/
-            └── broken.html          # Invalid HTML for error testing
+            ├── broken.html          # Invalid HTML for error testing
+            └── corrupted.pdf        # Corrupted PDF for curation error testing
 ```
 
 ## Dependencies
 
-Step 6 reuses existing dependencies without introducing new runtime requirements:
+Step 7 reuses existing dependencies without introducing new runtime requirements:
 
 ### Existing Dependencies
 
-- **HTML Processing**: `beautifulsoup4` and `lxml` from Step 3
+- **Document Curation**: `docling>=1.0.0` from Step 3
 - **Neo4j Integration**: `neo4j>=5.0.0` from Step 5  
-- **Extraction Backends**: `llama-index-llms-bedrock`, `boto3`, `spacy`, from Step 6
+- **Extraction Backends**: `llama-index-llms-bedrock`, `boto3`, `spacy` from Step 6
 - **Configuration**: `pyyaml`, `python-dotenv` from Step 0
 - **CLI Framework**: `click`, `rich` from Step 0
 

@@ -1,7 +1,8 @@
 # Step 5: Neo4j Bootstrap
 
-**Status**: Completed  
+**Status**: Completed (Updated for Multi-Format Support)  
 **Created**: 2025-11-28  
+**Updated**: 2025-12-05  
 **Related to**: Step 5 - Neo4j Database Connection and Schema Initialization
 
 ## Overview
@@ -45,15 +46,23 @@ Step 5 explicitly does NOT:
 Based on section 7.1 of the architecture document:
 
 #### `:Doc` Nodes
-Represents ingested documents (one HTML page = one Doc in v1).
+Represents ingested documents (one document file = one Doc in v1). Supports multiple formats including HTML, PDF, DOCX, etc.
 
 **Required Properties:**
 - `namespace` (string): Experiment/environment name (e.g., "default")
-- `doc_id` (string): Stable ID (relative path without extension, lowercased)  
-- `source_path` (string): Relative file path (e.g., "platform/kd/intro.html")
+- `doc_id` (string): Stable ID including file extension (e.g., "platform/kd/intro.html", "reports/q4.pdf")
+- `source_path` (string): Relative file path (e.g., "platform/kd/intro.html", "reports/q4.pdf")
+- `source_format` (string): Document format (e.g., "html", "pdf", "docx", "pptx")
 - `content_hash` (string): MD5 of curated text (for change detection)
 
+**Optional Properties:**
+- `markdown_path` (string): Path to saved markdown representation (e.g., "output/markdowns/default/intro.html.md")
+- `page_count` (int): Number of pages (for paginated formats like PDF)
+- `file_size` (int): Source file size in bytes
+
 **Merge Key:** `(namespace, doc_id)`
+
+**Note:** The `doc_id` includes the file extension to allow the same logical document in different formats to coexist (e.g., both `intro.html` and `intro.pdf` can exist in the same namespace).
 
 #### `:Entity` Nodes  
 Represents both entities and topics extracted from content.
@@ -86,6 +95,19 @@ Entity-to-entity relationships based on ontology: `(:Entity)-[:<RELATION_TYPE>]-
 **Required Properties:**
 - `namespace` (string): Same namespace as connected nodes
 
+### Multi-Format Document Strategy
+
+The schema supports ingesting the same logical document in multiple formats:
+
+**Example:**
+- `doc_id: "platform/intro.html"` → HTML version from Confluence export
+- `doc_id: "platform/intro.pdf"` → PDF version of same document
+
+Both can coexist in the same namespace as separate `:Doc` nodes because `doc_id` includes the file extension. This allows:
+- Comparing extraction quality across formats
+- Handling scenarios where different formats contain different information
+- Clear provenance of which format was used for extraction
+
 ### Constraints and Indexes
 
 ```cypher
@@ -96,9 +118,17 @@ CREATE CONSTRAINT entity_unique FOR (e:Entity) REQUIRE (e.namespace, e.entity_ty
 -- Additional indexes for query performance  
 CREATE INDEX doc_namespace FOR (d:Doc) ON (d.namespace);
 CREATE INDEX doc_content_hash FOR (d:Doc) ON (d.content_hash);
+CREATE INDEX doc_source_format FOR (d:Doc) ON (d.source_format);
 CREATE INDEX entity_namespace FOR (e:Entity) ON (e.namespace);
 CREATE INDEX entity_type FOR (e:Entity) ON (e.entity_type);
 CREATE INDEX entity_name FOR (e:Entity) ON (e.name);
+```
+
+**Index on `source_format`** enables efficient filtering by document type:
+```cypher
+// Find all PDF documents in namespace
+MATCH (d:Doc {namespace: 'default', source_format: 'pdf'})
+RETURN d.doc_id, d.source_path
 ```
 
 ## Data Structures & Neo4j APIs
@@ -117,6 +147,18 @@ class Neo4jConfig:
     username: str = "neo4j"  
     password: str = "password"
     database: str = "neo4j"
+
+@dataclass
+class DocNode:
+    """Represents a :Doc node in Neo4j."""
+    namespace: str
+    doc_id: str  # Includes extension: "platform/intro.html"
+    source_path: str
+    source_format: str  # "html", "pdf", "docx", etc.
+    content_hash: str
+    markdown_path: Optional[str] = None
+    page_count: Optional[int] = None
+    file_size: Optional[int] = None
     
 @dataclass
 class SchemaConstraint:
@@ -529,6 +571,68 @@ class TestNeo4jIntegration:
 - Docker Compose configuration for consistent Neo4j test environment
 - Test configuration files with different connection scenarios
 - Sample Cypher queries for validation
+- Test documents with various formats (HTML, PDF, DOCX) for schema validation
+
+### Multi-Format Document Tests
+
+```python
+class TestDocNodeSchema:
+    def test_create_doc_with_all_properties(self, neo4j_client):
+        """Test creating Doc node with all properties including format-specific ones."""
+        node_id = neo4j_client.create_doc(
+            namespace="test",
+            doc_id="platform/intro.pdf",
+            source_path="platform/intro.pdf",
+            source_format="pdf",
+            content_hash="abc123",
+            markdown_path="output/markdowns/test/intro.pdf.md",
+            page_count=42,
+            file_size=1024000
+        )
+        assert node_id is not None
+        
+    def test_multiple_formats_same_doc(self, neo4j_client):
+        """Test that same document in different formats creates separate nodes."""
+        # Create HTML version
+        html_id = neo4j_client.create_doc(
+            namespace="test",
+            doc_id="intro.html",
+            source_path="intro.html",
+            source_format="html",
+            content_hash="hash1"
+        )
+        
+        # Create PDF version
+        pdf_id = neo4j_client.create_doc(
+            namespace="test",
+            doc_id="intro.pdf",
+            source_path="intro.pdf",
+            source_format="pdf",
+            content_hash="hash2",
+            page_count=10
+        )
+        
+        assert html_id != pdf_id
+        
+        # Verify both exist
+        result = neo4j_client.execute_query(
+            "MATCH (d:Doc {namespace: 'test'}) WHERE d.doc_id STARTS WITH 'intro.' RETURN count(d) as count"
+        )
+        assert result[0]['count'] == 2
+        
+    def test_query_by_source_format(self, neo4j_client):
+        """Test filtering documents by format."""
+        # Create docs in different formats
+        neo4j_client.create_doc("test", "doc1.html", "doc1.html", "html", "h1")
+        neo4j_client.create_doc("test", "doc2.pdf", "doc2.pdf", "pdf", "h2", page_count=5)
+        neo4j_client.create_doc("test", "doc3.pdf", "doc3.pdf", "pdf", "h3", page_count=10)
+        
+        # Query only PDFs
+        result = neo4j_client.execute_query(
+            "MATCH (d:Doc {namespace: 'test', source_format: 'pdf'}) RETURN count(d) as count"
+        )
+        assert result[0]['count'] == 2
+```
 - Mock data for namespace and node count testing
 
 ## Success Criteria
@@ -537,9 +641,12 @@ class TestNeo4jIntegration:
 
 - [ ] Neo4j client successfully connects to database with proper authentication
 - [ ] Schema initialization creates all required constraints and indexes without errors
+- [ ] **:Doc nodes support multi-format documents with source_format, markdown_path, page_count properties**
+- [ ] **Document IDs with extensions (e.g., "intro.html", "intro.pdf") work correctly with unique constraints**
 - [ ] Namespace filtering works correctly for queries and database clearing operations
 - [ ] CLI commands (`init-schema`, `test-connection`, `status`, `clear-database`) execute successfully
 - [ ] Database connection failures are handled gracefully with helpful error messages
+- [ ] **Index on source_format enables efficient filtering by document type**
 
 ### Technical Requirements
 
@@ -559,15 +666,27 @@ class TestNeo4jIntegration:
 
 ### Integration Requirements
 
-- [ ] Schema supports entity types loaded from Step 3 entity definitions
+- [ ] Schema supports entity types loaded from Step 4 entity definitions
+- [ ] **Database structure ready for multi-format document storage from Step 3 curation backends**
+- [ ] **:Doc node properties accommodate metadata from both Docling and future HylandKE backends**
 - [ ] Database structure ready for document and entity storage in Step 6
 - [ ] CLI commands integrate cleanly with existing `kg-forge` command structure
 - [ ] Configuration values can be overridden via existing mechanisms (CLI, env, YAML)
 
 ## Next Steps
 
-Step 4 creates the database foundation that will store the structured knowledge graph built from curated content (Step 2) and entity definitions (Step 3). The initialized Neo4j schema provides the storage infrastructure needed for Step 5 (LLM Integration) to persist extracted entities and Step 6 (Ingest Pipeline) to store document-entity relationships.
+Step 5 creates the database foundation that will store the structured knowledge graph built from curated content (Step 3) and entity definitions (Step 4). The initialized Neo4j schema provides the storage infrastructure needed for:
 
-The constraints and indexes established in Step 4 ensure data integrity and query performance for the graph operations that will be implemented in subsequent steps. The CLI database management commands provide essential tools for development, testing, and experimentation workflows, allowing users to easily reset and inspect the database state during ontology iteration cycles.
+- **Step 3**: Multi-format document curation results (markdown_path, source_format, page_count)
+- **Step 6**: LLM Integration and extraction to persist extracted entities
+- **Step 7**: Ingest Pipeline to store document-entity relationships
+
+The updated schema supports the new multi-format document architecture where:
+- Documents from different formats can coexist (doc_id includes extension)
+- Format-specific metadata (page_count for PDFs, etc.) is preserved
+- Curation artifacts (markdown files) are tracked via markdown_path
+- Efficient queries by document format are enabled via source_format index
+
+The constraints and indexes established in Step 5 ensure data integrity and query performance for the graph operations that will be implemented in subsequent steps. The CLI database management commands provide essential tools for development, testing, and experimentation workflows, allowing users to easily reset and inspect the database state during ontology iteration cycles.
 
 The modular Neo4j client design ensures that database operations can be easily tested and that the graph storage layer can be extended or replaced in future versions while maintaining the same API interface.

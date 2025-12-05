@@ -1,5 +1,5 @@
 """
-Core ingest pipeline orchestrating HTML processing, LLM extraction, and Neo4j storage.
+Core ingest pipeline orchestrating multi-format curation, entity extraction, and Neo4j storage.
 """
 
 import logging
@@ -9,18 +9,18 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Set
 
 from kg_forge.config.settings import Settings, get_settings
+from kg_forge.curation import create_curation_backend, CurationError
 from kg_forge.graph.neo4j_client import Neo4jClient
 from kg_forge.llm.exceptions import LLMError, ParseError, ValidationError, ExtractionAbortError
-from kg_forge.models.document import ParsedDocument
-from kg_forge.parsers.document_loader import DocumentLoader
-from kg_forge.utils.hashing import compute_content_hash
+from kg_forge.models.curation import CurationResult
+from kg_forge.utils.hashing import compute_string_hash
 from kg_forge.utils.interactive import InteractiveSession
 from kg_forge.ontology_manager import get_ontology_manager
 from kg_forge.dedup.interface import create_dedup_backend
 from kg_forge.linking.interface import create_entity_linker
 from kg_forge.extraction.interface import create_extraction_backend
 
-from .filesystem import FileDiscovery
+from .filesystem import FileDiscovery, derive_doc_id
 from .hooks import HookRegistry, EntityRecord, get_global_registry
 from .metrics import IngestMetrics
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class IngestPipeline:
     """
     End-to-end ingest pipeline that orchestrates:
-    1. HTML file discovery and parsing (Step 3)
+    1. Multi-format document discovery and curation (Step 3)
     2. Configurable entity extraction (Step 6: LLM or spaCy backend)
     3. Entity deduplication (Step 7a: Splink/Zingg/none)
     4. Entity linking (Step 7b: Map to existing KG entities)
@@ -48,6 +48,7 @@ class IngestPipeline:
                  prompt_template: Optional[Path] = None,
                  model: Optional[str] = None,
                  max_docs: Optional[int] = None,
+                 curator: Optional[str] = None,
                  extractor: Optional[str] = None,
                  dedup_backend: Optional[str] = None,
                  fake_llm: bool = False,
@@ -57,7 +58,7 @@ class IngestPipeline:
         Initialize ingest pipeline.
         
         Args:
-            source_path: Root directory containing HTML files
+            source_path: Root directory containing document files
             namespace: Namespace for this ingest run
             dry_run: Run without writing to Neo4j
             refresh: Reprocess all documents ignoring content hash
@@ -65,6 +66,7 @@ class IngestPipeline:
             prompt_template: Override prompt template file
             model: Override LLM model name
             max_docs: Limit number of documents processed
+            curator: Curation backend (docling|hylandKE, default from config)
             extractor: Extraction backend (llm|spacy, default from config)
             dedup_backend: Deduplication backend (none|splink|zingg|both, default from config)
             fake_llm: Use fake LLM for testing
@@ -83,12 +85,28 @@ class IngestPipeline:
         self.namespace = namespace or self.config.app.default_namespace
         
         # Backend selection
+        self.curator = curator or getattr(self.config.app, 'default_curator', 'docling')
         self.extractor = extractor or self.config.app.default_extractor
         self.dedup_backend = dedup_backend or self.config.app.default_dedup_backend
         
+        # Markdown output directory
+        self.markdown_base_dir = Path("output/markdowns")
+        self.markdown_base_dir.mkdir(parents=True, exist_ok=True)
+        
         # Initialize components
         self.file_discovery = FileDiscovery(self.source_path)
-        self.document_loader = DocumentLoader()
+        
+        # Initialize curation backend
+        curation_config = {}
+        if self.curator == "hylandKE":
+            curation_config['hyland_endpoint'] = getattr(self.config.app, 'hyland_ke_endpoint', None)
+            curation_config['hyland_api_key'] = getattr(self.config.app, 'hyland_ke_api_key', None)
+        
+        self.curation_backend = create_curation_backend(
+            self.curator,
+            hyland_endpoint=curation_config.get('hyland_endpoint'),
+            hyland_api_key=curation_config.get('hyland_api_key')
+        )
         
         # Initialize ontology manager and set active pack
         self.ontology_manager = get_ontology_manager()
@@ -159,11 +177,12 @@ class IngestPipeline:
         self.processed_entities: List[EntityRecord] = []
         
         logger.info(f"Initialized IngestPipeline: source={source_path}, namespace={self.namespace}, "
+                   f"curator={self.curator}, extractor={self.extractor}, "
                    f"dry_run={dry_run}, refresh={refresh}, fake_llm={fake_llm}")
     
     def run(self) -> IngestMetrics:
         """
-        Execute the complete ingest pipeline.
+        Execute the complete ingest pipeline with multi-format support.
         
         Returns:
             IngestMetrics object with processing statistics
@@ -172,30 +191,30 @@ class IngestPipeline:
             ExtractionAbortError: If consecutive failure threshold exceeded
             Exception: For critical configuration or connection errors
         """
-        logger.info("Starting ingest pipeline")
+        logger.info("Starting ingest pipeline with multi-format curation")
         
         try:
             # Validate configuration and connections
             self._validate_setup()
             
-            # Discover files
-            html_files = list(self.file_discovery.discover_html_files())
-            self.metrics.files_discovered = len(html_files)
+            # Discover document files (multi-format)
+            document_files = list(self.file_discovery.discover_documents())
+            self.metrics.files_discovered = len(document_files)
             
             if self.max_docs:
-                html_files = html_files[:self.max_docs]
-                logger.info(f"Limited processing to {len(html_files)} documents")
+                document_files = document_files[:self.max_docs]
+                logger.info(f"Limited processing to {len(document_files)} documents")
             
-            logger.info(f"Discovered {len(html_files)} HTML files to process")
+            logger.info(f"Discovered {len(document_files)} document files to process")
             
-            if not html_files:
-                logger.warning("No HTML files found in source directory")
+            if not document_files:
+                logger.warning("No supported document files found in source directory")
                 self.metrics.finalize()
                 return self.metrics
             
             # Process each document
-            for i, file_path in enumerate(html_files, 1):
-                logger.info(f"Processing document {i}/{len(html_files)}: {file_path.name}")
+            for i, file_path in enumerate(document_files, 1):
+                logger.info(f"Processing document {i}/{len(document_files)}: {file_path.name}")
                 
                 try:
                     self._process_document(file_path)
@@ -208,6 +227,9 @@ class IngestPipeline:
                         
                 except ExtractionAbortError:
                     raise  # Re-raise abort errors
+                except CurationError as e:
+                    logger.error(f"Curation failed for {file_path}: {e}")
+                    self.metrics.record_curation_failed(str(e))
                 except Exception as e:
                     logger.error(f"Failed to process {file_path}: {e}")
                     self.metrics.record_doc_failed(str(e))
@@ -253,16 +275,18 @@ class IngestPipeline:
             raise RuntimeError(f"Ontology pack validation failed: {e}")
     
     def _process_document(self, file_path: Path) -> None:
-        """Process a single HTML document through the complete pipeline."""
-        doc_id = self.file_discovery.get_doc_id(file_path)
+        """Process a single document through the complete pipeline."""
+        doc_id = derive_doc_id(file_path, self.source_path)
         
         try:
-            # Parse HTML to curated document
+            # Curate document using configured curation backend
             start_time = time.time()
-            curated_doc = self._parse_html_document(file_path, doc_id)
+            curation_result = self._curate_document(file_path, doc_id)
+            self.metrics.add_curation_time(time.time() - start_time)
+            self.metrics.record_doc_curated()
             
             # Check if document needs processing (content hash comparison)
-            content_hash = compute_content_hash(curated_doc)
+            content_hash = compute_string_hash(curation_result.curated_text)
             
             if not self.refresh and self._should_skip_document(doc_id, content_hash):
                 logger.info(f"Skipping {doc_id} (unchanged content hash)")
@@ -271,25 +295,30 @@ class IngestPipeline:
             
             # Phase 1: Extract entities using configured backend
             extraction_start = time.time()
-            lexical_graph = self._extract_entities(curated_doc)
+            lexical_graph = self._extract_entities(curation_result, doc_id)
             self.metrics.add_llm_time(time.time() - extraction_start)
+            self.metrics.entities_extracted = len(lexical_graph.mentions)
             
             # Phase 2: Apply deduplication
             dedup_start = time.time()
             deduplicated_graph = self._apply_deduplication(lexical_graph)
             dedup_time = time.time() - dedup_start
+            self.metrics.entities_deduped = len(deduplicated_graph.canonical_entities)
             
             # Phase 3: Apply entity linking
             linking_start = time.time()
             link_results = self._apply_entity_linking(deduplicated_graph)
             linking_time = time.time() - linking_start
+            self.metrics.entities_linked = sum(1 for r in link_results if r.is_linked_entity())
             
             # Prepare metadata for hooks
             metadata = {
+                'curation_result': curation_result,
                 'extraction_result': lexical_graph,
                 'deduplicated_graph': deduplicated_graph,
                 'link_results': link_results,
                 'timing': {
+                    'curation_time': time.time() - start_time,
                     'extraction_time': time.time() - extraction_start,
                     'dedup_time': dedup_time,
                     'linking_time': linking_time
@@ -299,14 +328,14 @@ class IngestPipeline:
             }
             
             processed_metadata = self.hook_registry.execute_before_store(
-                curated_doc, metadata, self.neo4j_client
+                curation_result.curated_text, metadata, self.neo4j_client
             )
             
             # Store in Neo4j
             if not self.dry_run:
                 neo4j_start = time.time()
                 self._store_document_and_entities(
-                    curated_doc, doc_id, content_hash, deduplicated_graph, link_results, processed_metadata
+                    curation_result, doc_id, content_hash, deduplicated_graph, link_results, processed_metadata
                 )
                 self.metrics.add_neo4j_time(time.time() - neo4j_start)
             else:
@@ -332,23 +361,47 @@ class IngestPipeline:
             relation_count = len(deduplicated_graph.relations)
             logger.info(f"Successfully processed {doc_id}: {entity_count} canonical entities, {relation_count} relations")
             
+        except CurationError as e:
+            logger.error(f"Curation failed for {file_path}: {e}")
+            self.metrics.record_curation_failed(str(e))
+            raise
         except Exception as e:
             logger.error(f"Error processing document {file_path}: {e}")
             raise
     
-    def _parse_html_document(self, file_path: Path, doc_id: str) -> ParsedDocument:
-        """Parse HTML file into CuratedDocument."""
+    def _curate_document(self, file_path: Path, doc_id: str) -> CurationResult:
+        """
+        Curate document using configured curation backend.
+        
+        Args:
+            file_path: Path to document file
+            doc_id: Document ID (includes extension)
+            
+        Returns:
+            CurationResult with curated text and metadata
+            
+        Raises:
+            CurationError: If curation fails
+        """
         try:
-            documents = self.document_loader.load_files([file_path])
+            logger.debug(f"Curating document: {file_path} (doc_id={doc_id})")
             
-            if not documents:
-                raise ValueError(f"No documents could be loaded from {file_path}")
+            # Curate document using backend
+            curation_result = self.curation_backend.curate(
+                source_path=file_path,
+                namespace=self.namespace,
+                markdown_base_dir=self.markdown_base_dir
+            )
             
-            # Use first document (1 file = 1 document in v1)
-            return documents[0]
+            logger.info(f"Curated {doc_id}: {len(curation_result.curated_text)} chars, "
+                       f"format={curation_result.metadata.source_format}, pages={curation_result.metadata.page_count}")
             
+            return curation_result
+            
+        except CurationError:
+            raise  # Re-raise curation errors as-is
         except Exception as e:
-            raise ValueError(f"Failed to parse HTML document {file_path}: {e}")
+            raise CurationError(f"Failed to curate document {file_path}: {e}")
     
     def _should_skip_document(self, doc_id: str, content_hash: str) -> bool:
         """Check if document should be skipped based on content hash."""
@@ -380,15 +433,21 @@ class IngestPipeline:
         
         return False
     
-    def _extract_entities(self, curated_doc: ParsedDocument):
-        """Extract entities from document using configured backend."""
-        try:
-            # Get document ID for mention generation
-            doc_id = self.file_discovery.get_doc_id(Path(curated_doc.source_path)) if hasattr(curated_doc, 'source_path') else 'unknown'
+    def _extract_entities(self, curation_result: CurationResult, doc_id: str):
+        """
+        Extract entities from curated content.
+        
+        Args:
+            curation_result: CurationResult from curation backend
+            doc_id: Document ID for this document
             
+        Returns:
+            LexicalGraph with extracted entities and relations
+        """
+        try:
             # Use extraction backend to get lexical graph
             lexical_graph = self.extraction_backend.extract(
-                content=curated_doc.text,
+                content=curation_result.curated_text,
                 ontology=self.active_ontology,
                 doc_id=doc_id
             )
@@ -473,15 +532,25 @@ class IngestPipeline:
             logger.error(f"Entity linking failed: {e}")
             raise
     
-    def _store_document_and_entities(self, curated_doc: ParsedDocument, doc_id: str, 
+    def _store_document_and_entities(self, curation_result: CurationResult, doc_id: str, 
                                    content_hash: str, deduplicated_graph, link_results, metadata: Dict[str, Any]) -> None:
-        """Store document and deduplicated entities in Neo4j."""
+        """
+        Store document and deduplicated entities in Neo4j.
+        
+        Args:
+            curation_result: CurationResult from curation backend
+            doc_id: Document ID (includes extension)
+            content_hash: Content hash of curated text
+            deduplicated_graph: DedupedLexicalGraph with canonical entities
+            link_results: List of EntityLinkResult objects
+            metadata: Additional metadata from hooks
+        """
         try:
             with self.neo4j_client:
                 with self.neo4j_client.session() as session:
                     with session.begin_transaction() as tx:
                         # Store document node
-                        self._create_document_node(tx, curated_doc, doc_id, content_hash)
+                        self._create_document_node(tx, curation_result, doc_id, content_hash)
                         
                         # Process canonical entities and link results
                         entity_map = {}  # canonical_id -> neo4j_entity_id
@@ -539,14 +608,25 @@ class IngestPipeline:
             logger.error(f"Failed to store document {doc_id} in Neo4j: {e}")
             raise
     
-    def _create_document_node(self, tx, curated_doc: ParsedDocument, doc_id: str, content_hash: str) -> None:
-        """Create or update document node in Neo4j."""
+    def _create_document_node(self, tx, curation_result: CurationResult, doc_id: str, content_hash: str) -> None:
+        """
+        Create or update document node in Neo4j.
+        
+        Args:
+            tx: Neo4j transaction
+            curation_result: CurationResult with document data
+            doc_id: Document ID (includes extension)
+            content_hash: Content hash of curated text
+        """
         query = """
         MERGE (d:Doc {namespace: $namespace, doc_id: $doc_id})
         SET d.title = $title,
             d.content = $content,
             d.content_hash = $content_hash,
             d.source_path = $source_path,
+            d.source_format = $source_format,
+            d.markdown_path = $markdown_path,
+            d.page_count = $page_count,
             d.last_processed_at = datetime()
         RETURN d
         """
@@ -554,10 +634,13 @@ class IngestPipeline:
         tx.run(query,
                namespace=self.namespace,
                doc_id=doc_id,
-               title=curated_doc.title or "",
-               content=curated_doc.text or "",
+               title=curation_result.metadata.title or "",
+               content=curation_result.curated_text or "",
                content_hash=content_hash,
-               source_path=str(self.source_path))
+               source_path=doc_id,  # Use doc_id as source_path
+               source_format=curation_result.metadata.source_format,
+               markdown_path=str(curation_result.markdown_path) if curation_result.markdown_path else None,
+               page_count=curation_result.metadata.page_count or 0)
     
     def _create_canonical_entity_node(self, tx, canonical_entity) -> str:
         """Create or update canonical entity node in Neo4j."""

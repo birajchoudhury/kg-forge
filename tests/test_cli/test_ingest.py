@@ -24,7 +24,7 @@ def test_ingest_help_command(runner):
     result = runner.invoke(cli, ["ingest", "--help"])
     
     assert result.exit_code == 0
-    assert "Ingest HTML files from source directory" in result.output
+    assert "Ingest document files from source directory" in result.output
     assert "--source" in result.output
     assert "--namespace" in result.output
     assert "--dry-run" in result.output

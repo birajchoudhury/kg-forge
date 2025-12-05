@@ -37,10 +37,11 @@ kg-forge ingest --source <path> [options]
 ```
 
 **Required Arguments:**
-- `--source` - Path to source directory containing HTML files
+- `--source` - Path to source directory containing document files (HTML, PDF, DOCX, etc.)
 
 **Optional Arguments:**
 - `--namespace` - Experiment namespace (default: "default", alphanumeric only)
+- `--curator` - Curation backend: docling|hylandKE (default: docling)
 - `--dry-run` - Extract entities but don't write to graph
 - `--refresh` - Re-import even if content hash matches
 - `--prompt-template` - Override prompt template file
@@ -135,7 +136,12 @@ DEFAULT_NAMESPACE=default
 
 # Extraction Configuration
 DEFAULT_EXTRACTOR=llm
+DEFAULT_CURATOR=docling
 DEFAULT_DEDUP_BACKEND=splink
+
+# Hyland KE Configuration (optional, for future use)
+HYLAND_KE_API_ENDPOINT=https://api.hyland.example.com
+HYLAND_KE_API_KEY=your_api_key
 ```
 
 ### YAML Configuration File
@@ -161,7 +167,17 @@ app:
   log_level: INFO
   default_namespace: default
   default_extractor: llm
+  default_curator: docling
   default_dedup_backend: splink
+
+# Curation Configuration
+curation:
+  output_base_dir: output/markdowns
+  
+# Hyland KE Configuration (optional)
+hyland_ke:
+  api_endpoint: https://api.hyland.example.com
+  api_key: your_api_key
 ```
 
 ### Configuration Loading
@@ -248,16 +264,21 @@ kg_forge/
 - Add `--help` for all commands and subcommands
 - Use Click's built-in validation where possible
 - Add `--version` flag to show version information
-- Support new extraction and deduplication backend selection via `--extractor` and `--dedup-backend` flags
-- Validate backend choices (llm|spacy for extractor, none|splink|zingg|both for dedup-backend)
+- Support curation backend selection via `--curator` flag (docling|hylandKE)
+- Support extraction backend selection via `--extractor` flag (llm|spacy)
+- Support deduplication backend selection via `--dedup-backend` flag (none|splink|zingg|both)
+- Validate all backend choices with clear error messages
 
 ### Configuration Management
 - Use Pydantic for configuration validation and type safety
 - Support .env file, YAML config files, and environment variables
 - Implement configuration precedence (CLI args > YAML > env vars > .env > defaults)
 - Provide clear error messages for missing or invalid configuration
-- Validate extraction backend choices (llm, spacy) and deduplication backend choices (none, splink, zingg, both)
-- Support default values for new extraction and deduplication settings
+- Validate curation backend choices (docling, hylandKE)
+- Validate extraction backend choices (llm, spacy)
+- Validate deduplication backend choices (none, splink, zingg, both)
+- Support default values for curator, extractor, and deduplication settings
+- Include curation output directory configuration
 
 ### Logging
 - Use Python's standard logging module with Rich handler for enhanced output
@@ -285,18 +306,24 @@ kg_forge/
 - Test configuration loading from various sources (env, YAML, CLI args)
 - Test configuration precedence order
 - Test namespace validation
-- Test extraction and deduplication backend validation
-- Test error handling scenarios for invalid backend choices
+- Test curation backend validation (docling, hylandKE, invalid choices)
+- Test extraction backend validation (llm, spacy, invalid choices)
+- Test deduplication backend validation (none, splink, zingg, both, invalid choices)
+- Test error handling scenarios for all invalid backend choices
 - Mock external dependencies (not applicable in this step)
 
 ### Test Data
-- Sample .env files with various configurations including extraction settings
-- Sample YAML configuration files with backend configurations
-- Sample command-line invocations with --extractor and --dedup-backend flags
-- Invalid configuration scenarios including invalid backend choices
+- Sample .env files with various configurations including curator and extraction settings
+- Sample YAML configuration files with all backend configurations
+- Sample command-line invocations with --curator, --extractor, and --dedup-backend flags
+- Invalid configuration scenarios including all types of invalid backend choices
 - Invalid namespace examples
-- Valid and invalid extractor backend choices (llm, spacy, invalid_choice)
-- Valid and invalid deduplication backend choices (none, splink, zingg, both, invalid_choice)
+- Valid curator backend choices (docling, hylandKE)
+- Invalid curator backend choices (invalid_curator)
+- Valid extractor backend choices (llm, spacy)
+- Invalid extractor backend choices (invalid_extractor)
+- Valid deduplication backend choices (none, splink, zingg, both)
+- Invalid deduplication backend choices (invalid_dedup)
 
 ### Coverage Target
 - Aim for >90% code coverage
@@ -308,18 +335,23 @@ kg_forge/
 2. **Version Info**: `kg-forge --version` displays version information
 3. **Configuration**: Config loading works from .env file, YAML files, and environment variables with correct precedence
 4. **Namespace Validation**: Invalid namespace names are properly rejected
-5. **Backend Validation**: Invalid extractor and dedup-backend choices are properly rejected with helpful error messages
-6. **Default Values**: New extraction and deduplication backend settings use proper defaults (llm, splink)
-7. **Error Handling**: Invalid commands/arguments show helpful error messages
-8. **Tests**: Unit tests pass with good coverage
-9. **Documentation**: README provides clear installation and usage instructions
-10. **Package Structure**: Project follows Python best practices for packaging
+5. **Curator Backend Validation**: Invalid curator choices are properly rejected with helpful error messages (valid: docling, hylandKE)
+6. **Extractor Backend Validation**: Invalid extractor choices are properly rejected with helpful error messages (valid: llm, spacy)
+7. **Dedup Backend Validation**: Invalid dedup-backend choices are properly rejected with helpful error messages (valid: none, splink, zingg, both)
+8. **Default Values**: Backend settings use proper defaults (curator: docling, extractor: llm, dedup-backend: splink)
+9. **Error Handling**: Invalid commands/arguments show helpful error messages
+10. **Tests**: Unit tests pass with good coverage including all backend validation scenarios
+11. **Documentation**: README provides clear installation and usage instructions including multi-format document support
+12. **Package Structure**: Project follows Python best practices for packaging
 
 ## Next Steps
 
 After completing this foundation step:
 1. All CLI commands should be callable with proper help text
-2. Configuration system should be fully functional
+2. Configuration system should be fully functional with support for curator, extractor, and dedup backends
+3. Backend selection flags (--curator, --extractor, --dedup-backend) should be validated
+4. The foundation will support Step 3 (multi-format document curation) integration
+5. Subsequent steps (3-7) can build upon this CLI and configuration infrastructure
 3. Project structure should be in place for subsequent development
 4. Unit tests should provide confidence in the CLI infrastructure
 
