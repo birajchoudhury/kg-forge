@@ -7,7 +7,7 @@ from typing import Protocol, runtime_checkable
 from pathlib import Path
 
 from kg_forge.models.lexical import LexicalGraph
-from kg_forge.ontology.base import OntologyPack
+from kg_forge.ontology.schema import OntologySchema
 
 
 @runtime_checkable
@@ -18,12 +18,12 @@ class ExtractionBackend(Protocol):
     Backends take curated document text and an ontology pack, and return a lexical graph.
     """
     
-    def extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
+    def extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
         """Extract entities and relations from document content.
         
         Args:
             content: Curated text content of the document
-            ontology: Active ontology pack with entity definitions and relations
+            ontology: Normalized ontology schema with entity and relation definitions
             doc_id: Unique identifier for the document being processed
         
         Returns:
@@ -101,25 +101,24 @@ class BaseExtractionBackend:
         self._mention_counter = 0
         self._relation_counter = 0
     
-    def _validate_ontology_compatibility(self, ontology: OntologyPack, entity_type: str) -> bool:
+    def _validate_ontology_compatibility(self, ontology: OntologySchema, entity_type: str) -> bool:
         """Check if entity type is defined in the ontology.
         
         Args:
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
             entity_type: Entity type to validate
             
         Returns:
             True if entity type is valid, False otherwise
         """
-        entity_definitions = ontology.get_entity_definitions()
-        return entity_type in [defn.entity_id for defn in entity_definitions]
+        return entity_type in ontology.entities
     
-    def _validate_relation_compatibility(self, ontology: OntologyPack, relation_type: str, 
+    def _validate_relation_compatibility(self, ontology: OntologySchema, relation_type: str, 
                                        src_entity_type: str, dst_entity_type: str) -> bool:
         """Check if relation type is allowed between the given entity types.
         
         Args:
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
             relation_type: Relation type to validate
             src_entity_type: Source entity type
             dst_entity_type: Destination entity type
@@ -127,21 +126,9 @@ class BaseExtractionBackend:
         Returns:
             True if relation is valid according to ontology, False otherwise
         """
-        # Get the source entity definition
-        entity_definitions = ontology.get_entity_definitions()
-        src_defn = next((d for d in entity_definitions if d.entity_id == src_entity_type), None)
-        
-        if not src_defn or not src_defn.relations:
-            return False
-        
-        # Check if this relation type is defined for the source entity
-        for relation in src_defn.relations:
-            if relation.to_label == relation_type and relation.target_type == dst_entity_type:
-                return True
-        
-        return False
+        return ontology.validate_relation(relation_type, src_entity_type, dst_entity_type)
     
-    def extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
+    def extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
         """Extract entities and relations from content.
         
         Base implementation that sets up common state and delegates to _do_extract.
@@ -149,7 +136,7 @@ class BaseExtractionBackend:
         self._reset_counters()
         return self._do_extract(content, ontology, doc_id)
     
-    def _do_extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
+    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
         """Perform the actual extraction work.
         
         Must be implemented by concrete backend classes.
@@ -178,7 +165,7 @@ def create_extraction_backend(backend_name: str, config: dict = None) -> Extract
     """Factory function to create extraction backends by name.
     
     Args:
-        backend_name: Name of backend to create ('llm', 'spacy', 'fake')
+        backend_name: Name of backend to create ('llm', 'spacy', 'hybrid', 'fake')
         config: Optional configuration parameters
     
     Returns:
@@ -196,6 +183,9 @@ def create_extraction_backend(backend_name: str, config: dict = None) -> Extract
     elif backend_name == "spacy":
         from kg_forge.extraction.spacy_backend import SpacyLexicalBackend
         return SpacyLexicalBackend(**config)
+    elif backend_name == "hybrid":
+        from kg_forge.extraction.hybrid_backend import HybridExtractionBackend
+        return HybridExtractionBackend(**config)
     elif backend_name == "fake":
         from kg_forge.extraction.fake_backend import FakeExtractionBackend
         return FakeExtractionBackend(**config)

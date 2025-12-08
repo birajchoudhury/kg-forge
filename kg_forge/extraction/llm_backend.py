@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from kg_forge.models.lexical import LexicalGraph
-from kg_forge.ontology.base import OntologyPack
+from kg_forge.ontology.schema import OntologySchema
 from kg_forge.extraction.interface import BaseExtractionBackend
 from kg_forge.extraction.exceptions import (
     ExtractionError, 
@@ -105,12 +105,12 @@ class LLMExtractionBackend(BaseExtractionBackend):
             logger.error(f"Failed to initialize LLM backend: {e}")
             raise BackendNotAvailableError(f"LLM backend initialization failed: {e}")
     
-    def _do_extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
+    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
         """Perform LLM-based extraction.
         
         Args:
             content: Curated document content
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
             doc_id: Document identifier
         
         Returns:

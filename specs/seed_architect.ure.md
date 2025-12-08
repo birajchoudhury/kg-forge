@@ -3,9 +3,10 @@
 This document describes the **technical architecture** for a CLI tool that:
 
 - **ingests** unstructured content,
-- **extracts entities/topics** via either:
-  - an **LLM-based pipeline**, or
-  - **spaCy + GLiNER + GLiREL lexical graph pipeline**,
+- **extracts entities/topics** via one of three extraction pipelines:
+  - an **LLM-based pipeline** (full LLM extraction),
+  - **spaCy + GLiNER + GLiREL lexical graph pipeline** (zero-shot NER + relation extraction), or
+  - **Hybrid GLiNER + LLM pipeline** (ontology-aware NER + LLM properties/relations),
 - runs **deduplication** on extracted entities using **Splink/Zingg**,
 - performs **entity linking** to an ontology-backed **Neo4j Knowledge Graph**,
 - **queries** entities and related chunks,
@@ -27,9 +28,10 @@ A **Python CLI tool** with three primary subcommands:
 
 - `ingest`
   - curate content from multiple document formats (HTML, PDF, etc.) using a configurable curation backend,
-  - **run one of two extraction pipelines** to form a lexical graph from the extracted entities and relations:
-    - **LLM-based**, or
-    - **spaCy + GLiNER + GLiREL** (lexical graph),
+  - **run one of three extraction pipelines** to form a lexical graph from the extracted entities and relations:
+    - **LLM-based** (full LLM extraction),
+    - **spaCy + GLiNER + GLiREL** (zero-shot lexical graph), or
+    - **Hybrid** (GLiNER ontology-aware NER + LLM for properties and relations),
   - run **deduplication** on the lexical/entity layer using Splink/Zingg,
   - run **entity linking** against an ontology-backed KB,
   - populate/update a Neo4j-based Knowledge Graph.
@@ -56,14 +58,15 @@ For this project:
 The user can choose the curation and extraction modes at runtime:
 
 --curator [docling|hyland_ke] (default docling)
---extractor [llm|spacy] (default llm)
+--extractor [llm|spacy|hybrid] (default llm)
 
 For the first step, we want **basic implementations** with minimal external dependencies:
 
 - curate text: simple HTML → curated text extraction,
-- extract entities and relationships between entities using either of the mentioned methods and build a **lexical graph**: 
-  - REST call to **Bedrock** (via LlamaIndex client) using a configurable prompt template, or 
-  - via **spaCy + GLiNER + GLiREL** ,
+- extract entities and relationships between entities using one of three methods and build a **lexical graph**: 
+  - REST call to **Bedrock** (via LlamaIndex client) using a configurable prompt template,
+  - via **spaCy + GLiNER + GLiREL** (zero-shot NER + relation extraction), or
+  - via **Hybrid pipeline** (spaCy transformer NER + LLM for properties/relations),
 - run **deduplication** on the lexical/entity layer using **Splink/Zingg**,
 - perform **entity linking** from deduped mentions to canonical entities (ontology),
 - populate/update the Neo4j Knowledge Graph.
@@ -81,7 +84,7 @@ In the long term, we may:
 
 The architecture must therefore be **modular**, with clear boundaries so that:
 
-- extraction backends (LLM vs spacy pipeline vs KE API),
+- extraction backends (LLM vs spacy pipeline vs hybrid vs KE API),
 - deduplication backends (Splink vs Zingg vs none),
 - knowledge graph (Neo4j vs DGraph vs AWS Neptune)
 - and storage backends (filesystem vs Content Lake, etc.)
@@ -113,6 +116,8 @@ The architecture must therefore be **modular**, with clear boundaries so that:
 - **CLI:** `click`
 - **Graph DB:** Neo4j (official Python driver)
 - **Graph Visualization:** `vis.js` (via generated HTML)
+- **Ontology Processing:**
+  - **rdflib** (TTL/RDF parsing and SPARQL queries for ontology ingestion)
 - **Document Curation:**
   - **Docling** (multi-format document processing and conversion to markdown),
   - **Hyland KE** (future: curated content API integration).
@@ -137,7 +142,7 @@ Parameters such as:
 - Neo4j location & credentials,
 - Bedrock model name,
 - **Curator backend** (docling or hyland_ke),
-- **Extractor mode** (llm or spacy),
+- **Extractor mode** (llm, spacy, or hybrid),
 - **Dedup backend** (none, splink, zingg, both/ensemble),
 are provided via a `.env` file.
 
@@ -167,11 +172,15 @@ are provided via a `.env` file.
    - **Chunking**:
      - Start with **one file = one chunk** (one `Doc` node per document file).
 
-3. **Ontology / Entity-Type Loading**
-   - Load entity & topic definitions from `entities_extract/*.md` (see §4).
+3. **Ontology Ingestion & Normalization**
+   - Load ontology from **TTL files** (.ttl) or **Markdown files** (.md) for backward compatibility
+   - Parse TTL using `rdflib` to extract entities (rdfs:Class/owl:Class) and relations (rdf:Property/owl:ObjectProperty)
+   - Parse Markdown from `entities_extract/*.md` (legacy format - see §4)
+   - Normalize into `OntologySchema` with entities and relations
+   - **Raw TTL/Markdown never passed to extraction backends**
 
-4. **LLM / SpaCy Pipeline/ KE-based Extraction (Configurable)**
-  In v1, `--extractor` supports only `llm` and `spacy`. A `KE` (KnowledgeEnrichment SaaS)
+4. **LLM / SpaCy Pipeline / Hybrid / KE-based Extraction (Configurable)**
+  In v1, `--extractor` supports `llm`, `spacy`, and `hybrid`. A `KE` (KnowledgeEnrichment SaaS)
   backend is planned but not yet implemented.
 
   Depending on --extractor:
@@ -264,12 +273,81 @@ are provided via a `.env` file.
   - Adjust entity definitions, prompts, hooks.
   - Re-ingest with `--dry-run` or new `--namespace`.
   - Compare extraction strategies:
-     --extractor llm vs --extractor spacy.
+     --extractor llm vs --extractor spacy vs --extractor hybrid.
   - Compare dedup strategies:
   --dedup none/splink/zingg/both.
    - Observe impact in Neo4j & rendered graph.
 
 ## 3.2 Curation and Extraction as Pluggable Backends
+
+### 3.2.0 Ontology Ingestion & Normalization
+
+**TTL (.ttl) files are the new standard ontology format**, with backward compatibility for the legacy markdown-based format.
+
+#### Architecture Flow:
+
+```
+TTL (.ttl files) ──┐
+                   ├──> Ontology Ingestion ──> OntologySchema (normalized)
+Markdown (.md)  ──┘                                   │
+                                                       ├──> GLiNER config (labels + descriptions)
+                                                       ├──> GLiREL config (relations + constraints)
+                                                       └──> LLM prompt snippets (JSON)
+```
+
+**Key Principle**: Raw TTL files are **never passed directly** to spaCy, GLiNER, GLiREL, or LLMs. All downstream components consume the normalized `OntologySchema`.
+
+#### OntologySchema (Internal Representation)
+
+Normalized ontology structure used throughout the system:
+
+```python
+@dataclass
+class EntityType:
+    name: str                    # e.g., "Product", "Team"
+    iri: str                     # e.g., "http://example.org/ont#Product"
+    description: str             # Natural language description
+    properties: List[Property]   # Entity-specific properties
+    
+@dataclass
+class RelationType:
+    name: str                    # e.g., "WORKS_ON"
+    iri: str                     # e.g., "http://example.org/ont#worksOn"
+    head_types: List[str]        # Allowed source entity types
+    tail_types: List[str]        # Allowed target entity types
+    description: str             # Natural language description
+    properties: List[Property]   # Relation-specific properties
+
+@dataclass
+class OntologySchema:
+    entities: Dict[str, EntityType]
+    relations: Dict[str, RelationType]
+    metadata: Dict[str, Any]     # Version, author, provenance, etc.
+    
+    def to_gliner_config(self) -> Dict[str, str]:
+        """Generate GLiNER label config with natural language descriptions."""
+        
+    def to_glirel_config(self) -> Dict[str, RelationConstraints]:
+        """Generate GLiREL relation config with type constraints."""
+        
+    def to_llm_prompt_snippet(self) -> str:
+        """Generate compact JSON for LLM prompts."""
+```
+
+#### Ontology Ingestion Backends
+
+**TTLOntologyLoader** (primary, new):
+- Parses .ttl files using `rdflib`
+- Extracts entities (rdfs:Class or owl:Class)
+- Extracts relations (rdf:Property, owl:ObjectProperty)
+- Builds OntologySchema with IRIs preserved
+
+**MarkdownOntologyLoader** (legacy, backward compatible):
+- Parses entities_extract/*.md files
+- Generates synthetic IRIs (e.g., `urn:kg-forge:entity:Product`)
+- Builds OntologySchema for compatibility
+
+Both loaders produce the same `OntologySchema` output.
 
 ### 3.2.1 CurationBackend
 
@@ -279,19 +357,22 @@ Conceptually:
 
 ```python
 class CurationBackend(Protocol):
-    def curate(self, file_path: str, namespace: str) -> CurationResult:
-        """Process a document file and return markdown + curated text.
+    def curate(self, file_path: str, namespace: str, chunking_enabled: bool = False) -> CurationResult:
+        """Process a document file and return markdown + curated text + optional chunks.
         
         Args:
             file_path: Path to source document
             namespace: Current namespace for organizing outputs
+            chunking_enabled: Whether to produce document chunks
             
         Returns:
             CurationResult with:
-                - curated_text: Clean text for extraction
+                - curated_text: Clean text for extraction (full or first chunk)
                 - markdown_content: Full markdown representation
                 - markdown_path: Where markdown was saved
-                - metadata: Format, page count, etc.
+                - chunks: List of DocumentChunk (if chunking_enabled)
+                - chunks_path: Path to chunks.json file (if chunking_enabled)
+                - metadata: Format, page count, chunking info, etc.
         """
 ```
 
@@ -305,18 +386,85 @@ Implementations:
 We treat the extraction + lexical graph building as backends behind a common interface.
 A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
 
+**All extraction backends receive `OntologySchema` (not raw TTL or markdown).**
+
 Conceptually:
 
 ```python
 class ExtractionBackend(Protocol):
-    def extract(self, content: str, ontology: OntologyPack) -> LexicalGraph:
-        """Produce a LexicalGraph (mentions + relations) from curated text."""
+    def extract(self, content: str, ontology: OntologySchema) -> LexicalGraph:
+        """Produce a LexicalGraph (mentions + relations) from curated text.
+        
+        Args:
+            content: Curated document text
+            ontology: Normalized OntologySchema (from TTL or markdown)
+            
+        Returns:
+            LexicalGraph with mentions and relations
+        """
 ```
 
 Implementations:
 
-- LLMExtractionBackend (existing)
-- SpacyLexicalBackend (new: spaCy + GLiNER + GLiREL)
+- **LLMExtractionBackend**: 
+  - Uses `ontology.to_llm_prompt_snippet()` to generate JSON for prompt
+  - Full LLM-based extraction (entities + properties + relations)
+  
+- **SpacyLexicalBackend**: 
+  - Uses `ontology.to_gliner_config()` for entity labels
+  - Uses `ontology.to_glirel_config()` for relation constraints
+  - spaCy + GLiNER + GLiREL (zero-shot NER + relation extraction)
+  
+- **HybridExtractionBackend**: 
+  - Phase 1: Uses `ontology.to_gliner_config()` for entity detection
+  - Phase 2: Uses `ontology.to_llm_prompt_snippet()` for relation extraction
+  - GLiNER + LLM (ontology-aware entity detection + LLM property/relation extraction)
+
+A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
+
+### 3.2.3 Hybrid Extraction Backend
+
+The **HybridExtractionBackend** combines the strengths of both approaches:
+
+**Phase 1: Ontology-Aware Entity Detection with GLiNER**
+- Uses GLiNER (Generalist and Lightweight model for Named Entity Recognition)
+- **Ontology-guided**: Receives entity types directly from the active ontology pack
+- Performs zero-shot NER for custom domain-specific entity types
+- Detects entities that match the ontology schema (e.g., "Content Lake", "HXPR", "Workstream")
+- Produces entity mentions with confidence scores and precise character offsets
+
+**Phase 2: Property and Relation Extraction with LLM**
+- Takes GLiNER-detected entities as input context
+- Uses LLM to extract:
+  - Additional properties for each entity based on ontology definitions
+  - Relationships between detected entities based on ontology schema
+- Constructs specialized prompts that reference the detected entities
+- Validates relations against ontology-defined relationship types
+
+**Benefits:**
+- **Ontology alignment**: Both phases use the ontology (GLiNER for detection, LLM for enrichment)
+- **Domain awareness**: GLiNER can detect custom entities that spaCy's pre-trained models miss
+- **Efficiency**: Only calls LLM for complex property/relation extraction, not basic NER
+- **Flexibility**: GLiNER adapts to any ontology without retraining
+- **Fallback resilience**: If LLM fails, still returns graph with GLiNER-detected entities
+
+**Configuration:**
+```python
+extraction_config = {
+    'gliner_model': 'urchade/gliner_base',  # Zero-shot NER model
+    'device': 'cpu',  # or 'cuda' for GPU
+    'llm_model_name': 'anthropic.claude-3-haiku-20240307-v1:0',
+    'llm_region': 'us-east-1',
+    'entity_confidence_threshold': 0.5,  # GLiNER threshold
+    'fake_mode': False
+}
+```
+
+**Output:**
+- `LexicalGraph` with:
+  - Mentions from GLiNER (with `detection_method: "gliner"`)
+  - Relations from LLM (with `extraction_method: "llm_hybrid"`)
+  - Metadata indicating both gliner_model and llm_model used
 
 A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
 
@@ -331,8 +479,23 @@ The output of a `CurationBackend` for a single document.
 - `curated_text`: string (clean text suitable for extraction backends)
 - `markdown_content`: string (full markdown representation of document)
 - `markdown_path`: string (absolute path where markdown was saved)
+- `chunks`: list of `DocumentChunk` or None (when chunking is disabled)
+- `chunks_path`: string or None (absolute path where chunks.json was saved, when chunking enabled)
 - `metadata`: dict  
-  Examples: source_format ("html", "pdf", etc.), page_count, curation_backend, timestamp, file_size.
+  Examples: source_format ("html", "pdf", etc.), page_count, curation_backend, timestamp, file_size, chunking_enabled, chunk_count.
+
+### 3.3.0a `DocumentChunk`
+
+Represents a chunk of a document when chunking is enabled.
+
+- `chunk_id`: string (unique identifier for this chunk, e.g., "<doc_id>_chunk_001")
+- `doc_id`: string (parent document ID)
+- `page`: int or None (page number if available from source document)
+- `section`: string or None (section/heading name if available)
+- `start_offset`: int (character offset in the full markdown where chunk starts)
+- `end_offset`: int (character offset in the full markdown where chunk ends)
+- `text`: string (the actual chunk text content)
+- `metadata`: dict (optional additional metadata like chunk_index, heading_level, etc.)
 
 ### 3.3.1 `LexicalMention`
 
@@ -412,13 +575,83 @@ The result of linking a canonical lexical entity to the Neo4j KG.
 
 ---
 
-## 4. Ontology Source – `entities_extract/` Definitions
+## 4. Ontology Sources – TTL (Standard) & Markdown (Legacy)
 
-This section defines how we describe **entity types** and **topics** that the LLM should extract, and how those definitions are used to build prompts and the graph.
+This section defines how ontologies are represented and ingested into the system.
 
 ---
 
-### 4.1 Entities & Topics
+### 4.1 TTL Ontology Format (Standard)
+
+**TTL (Turtle) is the standard ontology format.** Ontologies are defined using RDF/OWL vocabularies.
+
+#### 4.1.1 Structure
+
+A TTL ontology file contains:
+
+1. **Entity Types** (rdfs:Class or owl:Class):
+   - Class IRI (e.g., `<http://example.org/ont#Product>`)
+   - `rdfs:label` for display name
+   - `rdfs:comment` or `skos:definition` for description
+   - Optional properties (datatype and object properties)
+
+2. **Relation Types** (rdf:Property or owl:ObjectProperty):
+   - Property IRI (e.g., `<http://example.org/ont#worksOn>`)
+   - `rdfs:domain` (allowed head entity types)
+   - `rdfs:range` (allowed tail entity types)
+   - `rdfs:label` and `rdfs:comment` for documentation
+
+Example TTL snippet:
+
+```turtle
+@prefix : <http://example.org/ont#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2001/XMLSchema#> .
+
+:Product a owl:Class ;
+    rdfs:label "Product" ;
+    rdfs:comment "A software product or service offering" .
+
+:Team a owl:Class ;
+    rdfs:label "Team" ;
+    rdfs:comment "An engineering team or organizational unit" .
+
+:worksOn a owl:ObjectProperty ;
+    rdfs:label "works on" ;
+    rdfs:domain :Team ;
+    rdfs:range :Product ;
+    rdfs:comment "Indicates that a team works on a product" .
+```
+
+#### 4.1.2 Ingestion Process
+
+1. **Parse TTL** with `rdflib`:
+   - Load .ttl file(s) into an RDF graph
+   - Query for classes (entities): `?class a owl:Class`
+   - Query for properties (relations): `?prop a owl:ObjectProperty`
+   
+2. **Extract metadata**:
+   - IRIs, labels, comments/descriptions
+   - Domain/range constraints for relations
+   
+3. **Build OntologySchema**:
+   - Normalize into internal representation
+   - Generate configs for downstream components
+
+#### 4.1.3 Multiple TTL Files
+
+An ontology pack can include multiple .ttl files:
+- Core ontology (domain concepts)
+- Application-specific extensions
+- Third-party vocabularies (FOAF, Dublin Core, etc.)
+
+All files are merged into a single `OntologySchema`.
+
+---
+
+### 4.2 Markdown Ontology Format (Legacy - Backward Compatible)
+
+**Markdown format is supported for backward compatibility only.** New ontologies should use TTL.
 
 Entities and topics are defined as **markdown files** in a dedicated folder:
 
@@ -433,7 +666,7 @@ entities_extract/
   topic.md
   ...
 
-For v1:
+For backward compatibility:
 
 - We treat **entities and topics the same way** in the pipeline.
   - **Entities** are often explicitly named in text (e.g., product names, team names).
@@ -579,14 +812,41 @@ This round-trip is critical for the **“experiment, observe, refine”** workfl
 ### 4.6 OntologyPack
 
 An `OntologyPack` is an in-memory wrapper around the active ontology, backed on disk
-by a folder like `entities_extract/`. It contains:
+by either **TTL files** or **Markdown files** (legacy).
 
-- the parsed entity-type definitions from `entities_extract/*.md`,
-- relation schema (allowed relations per type),
-- a reference to the active `prompt_template.md`,
-- convenience lookups by `entity_type` ID.
+#### Structure:
 
-All `ExtractionBackend` implementations treat `OntologyPack` as read-only configuration.
+```python
+class OntologyPack:
+    def __init__(self, pack_path: Path):
+        """Initialize from TTL or Markdown ontology pack."""
+        
+    def load_ontology_schema(self) -> OntologySchema:
+        """Load and normalize ontology into OntologySchema.
+        
+        - If .ttl files present: Use TTLOntologyLoader
+        - Else: Use MarkdownOntologyLoader (legacy)
+        
+        Returns normalized OntologySchema.
+        """
+```
+
+#### What it contains:
+
+- **For TTL packs**: `.ttl` files with RDF/OWL ontology definitions
+- **For Markdown packs** (legacy): 
+  - Parsed entity-type definitions from `entities_extract/*.md`
+  - Relation schema (allowed relations per type)
+  - Reference to `prompt_template.md`
+
+#### Key principle:
+
+- `OntologyPack` loads and normalizes the ontology into `OntologySchema`
+- **All extraction backends receive `OntologySchema`** (never raw TTL or markdown)
+- Extraction backends call helper methods:
+  - `ontology.to_gliner_config()` → GLiNER labels
+  - `ontology.to_glirel_config()` → GLiREL relation constraints  
+  - `ontology.to_llm_prompt_snippet()` → Compact JSON for LLM prompts
 
 ---
 
@@ -859,6 +1119,10 @@ Options:
 - --namespace TEXT (default "default")
 - --curator [docling|hyland_ke] (default docling)
   - Selects curation backend for document processing.
+- --chunking [on|off] (default off)
+  - Controls whether documents are split into chunks.
+  - When on: produces <doc_id>.md + <doc_id>.chunks.json
+  - When off: produces only <doc_id>.md (full document extraction)
 - --refresh (flag)
   - If not set:
     - skip re-import when content_hash is unchanged.
@@ -869,7 +1133,7 @@ Options:
   - Override default entities_extract/prompt_template.md.
 - --model TEXT
   - Override default Bedrock model name from config.
-- --extractor [llm|spacy] (default llm)
+- --extractor [llm|spacy|hybrid] (default llm)
   - Selects extraction backend.
 - --dedup-backend [none|splink|zingg|both] (default splink)  
       - In v1, `both` behaves like `splink`. A true ensemble mode will be added later.
@@ -883,8 +1147,9 @@ Behaviour:
     - sub-path + filename with extension, lower case.
     - Example: "platform/kd/intro.html" or "platform/kd/intro.pdf"
   - Run selected CurationBackend:
-    - Process document → markdown + curated text.
+    - Process document → markdown + curated text (+ optional chunks if --chunking=on).
     - Save markdown to `output/markdowns/<namespace>/<doc_id>.md`.
+    - If --chunking=on: Save chunks to `output/markdowns/<namespace>/<doc_id>.chunks.json`.
     - On curation failure:
       - Log error with file path and reason.
       - Skip document and continue with next file.
@@ -892,13 +1157,18 @@ Behaviour:
   - If a :Doc already exists with same (namespace, doc_id, content_hash):
     - and --refresh is not provided → skip.
   - Otherwise:
-    - run the extraction pipeline (llm or spacy)
-    - produce a LexicalGraph (mentions + relations),
+    - **Extraction (chunk-aware)**:
+      - If --chunking=off: run extraction backend on full curated_text → LexicalGraph
+      - If --chunking=on:
+        - For each chunk in chunks:
+          - Run extraction backend on chunk.text → LexicalGraph
+          - Annotate each LexicalMention with chunk metadata (chunk_id, page, section)
+        - Merge all chunk-level LexicalGraphs into document-level LexicalGraph
     - Run DedupBackend (if not none) → DedupedLexicalGraph.
     - Run EntityLinkerBackend → mapping of canonical lexical entities → KG entities.
     - call process_before_store,
     - Create/merge :Doc, :Entity, :MENTIONS, and :RELATION edges in Neo4j.
-    - Include source_format, markdown_path in :Doc properties.
+    - Include source_format, markdown_path, chunks_path (if --chunking=on) in :Doc properties.
     - collect entities for batch summary.
 
 - After all docs:
@@ -1060,9 +1330,149 @@ Integration with Hyland curated content API:
 
 ### 9.3 Chunking
 
-- Start with **one file = one chunk = one Doc**.
-- No semantic chunking / splitting in v1.
-- This assumption simplifies the schema and pipeline.
+#### 9.3.1 Overview
+
+Chunking is an **optional feature** controlled by the `--chunking` CLI flag during ingestion.
+
+**Why Chunking?**
+
+- **LLM context limitations**: Large documents may exceed token limits or degrade extraction quality
+- **Better extraction precision**: Processing focused segments improves entity/relation detection
+- **Fine-grained provenance**: Track which page/section entities came from
+
+#### 9.3.2 CLI Control
+
+```bash
+kg-forge ingest <path> --chunking=on   # Enable chunking
+kg-forge ingest <path> --chunking=off  # Disable (default)
+```
+
+Future: `--chunking=semantic`, `--chunking=fixed-size` for advanced modes.
+
+#### 9.3.3 Behavior When Chunking is OFF (Default)
+
+- **One file = one document = one extraction unit**
+- CurationBackend produces:
+  - Full markdown file: `output/markdowns/<namespace>/<doc_id>.md`
+  - Curated text (full document)
+- ExtractionBackend processes entire document text in one pass
+- Graph contains one `:Doc` node per file
+
+#### 9.3.4 Behavior When Chunking is ON
+
+**Curation Phase:**
+
+CurationBackend produces **two artifacts** per document:
+
+1. **`<doc_id>.md`** – Full markdown representation (unchanged from chunking=off)
+2. **`<doc_id>.chunks.json`** – JSON array of DocumentChunk objects
+
+Example `chunks.json`:
+```json
+[
+  {
+    "chunk_id": "doc123_chunk_001",
+    "doc_id": "doc123",
+    "page": 1,
+    "section": "Introduction",
+    "start_offset": 0,
+    "end_offset": 512,
+    "text": "# Introduction\n\nThis document describes..."
+  },
+  {
+    "chunk_id": "doc123_chunk_002",
+    "doc_id": "doc123",
+    "page": 1,
+    "section": "Architecture Overview",
+    "start_offset": 512,
+    "end_offset": 1024,
+    "text": "## Architecture Overview\n\nThe system consists of..."
+  }
+]
+```
+
+**Extraction Phase:**
+
+- ExtractionBackend receives the list of chunks (not full text)
+- Processes **each chunk independently**:
+  - For LLM backend: Send chunk.text + ontology to LLM
+  - For spaCy backend: Run GLiNER + GLiREL on chunk.text
+- Produces one `LexicalGraph` per chunk
+- Each `LexicalMention` includes:
+  - `chunk_id` in features/metadata
+  - `page` and `section` from chunk metadata
+  - Offsets are relative to chunk (or can be adjusted to full-doc offsets)
+- Merge all chunk-level `LexicalGraph` instances into one document-level `LexicalGraph`
+
+**Note on Cross-Chunk Entities and Relations:**
+
+When chunking is enabled, each chunk is extracted independently. This design choice has important implications:
+
+- **Same entity in multiple chunks** → Creates separate `LexicalMention` instances
+  - Example: "RAG system" mentioned in chunk 1, chunk 3, and chunk 5 produces 3 distinct mentions
+- **Relations between chunks** → Not detected at extraction time
+  - Example: Entity A (chunk 1) relates to Entity B (chunk 3) - this relation won't appear in lexical graphs
+
+**Why this design?**
+
+✅ **Pros:**
+- Maintains focused LLM context per chunk (500-1000 tokens)
+- Enables parallel processing of chunks
+- Provides fault tolerance (one chunk fails, others succeed)
+- Better extraction quality on focused text segments
+
+❌ **Trade-off:**
+- Higher mention count (same entity = multiple mentions)
+- Missing cross-chunk relations at lexical level
+- Increased deduplication workload
+
+**How cross-chunk issues are resolved:**
+
+The deduplication and canonical graph construction phases address these limitations:
+
+1. **Entity Resolution (Deduplication Phase):**
+   - Mentions "John Smith" (chunk 1), "J. Smith" (chunk 3), "John Smith" (chunk 5) → clustered into one `CanonicalLexicalEntity`
+   - Same entity across chunks is recognized and merged
+
+2. **Cross-Chunk Relations (Canonical Graph):**
+   - After entity linking to Neo4j, relations form between canonical entities
+   - Example:
+     - Chunk 1: "KD team works on Knowledge Discovery"
+     - Chunk 2: "Knowledge Discovery uses RAG system"  
+     - Chunk 3: "RAG system uses AWS Bedrock"
+     - Chunk 5: "Platform Engineering maintains AWS Bedrock"
+   - In the canonical graph: `(KD team)-[:WORKS_ON]->()-[:USES*]->(AWS Bedrock)<-[:MAINTAINS]-(Platform Engineering)`
+   - The cross-chunk relation between "KD team" and "AWS Bedrock" **emerges through graph traversal**, not direct extraction
+
+**Bottom line:** We accept chunk-local extraction (narrow view) in exchange for better per-chunk quality. The canonical graph (wide view) recovers cross-chunk relationships through deduplication and graph connectivity.
+
+**Deduplication Phase:**
+
+- Receives merged LexicalGraph from all chunks
+- Deduplication works across all chunks (same as before)
+- Canonical entities may reference mentions from multiple chunks
+- Cross-chunk entity merging happens here
+
+**Graph Storage:**
+
+- One `:Doc` node per document (not per chunk)
+- `:Entity` nodes linked to `:Doc` via `:MENTIONS`
+- Optional: Store chunk-level provenance in `:MENTIONS` relationship properties:
+  - `chunk_id`, `page`, `section`, `offset_in_chunk`
+
+#### 9.3.5 Chunking Strategy (v1)
+
+For v1, use **simple size/structure-based chunking**:
+
+- Split on section boundaries (headings) when available
+- Target chunk size: ~500-1000 tokens (configurable)
+- Preserve context: Include section heading in each chunk
+- Avoid splitting mid-sentence or mid-paragraph when possible
+
+Future iterations may support:
+- Semantic chunking (embedding-based similarity)
+- Sliding window with overlap
+- Custom chunking strategies per document type
 
 ---
 
@@ -1120,14 +1530,32 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 - Add a README.
 - No actual processing or LLM calls yet.
 
-### Step 1 – Ontology Management
+### Step 1 – Ontology Management & TTL Ingestion
 
-- Implement ontology pack system for organizing entity definitions:
-  - Dynamic loading and activation of ontology packs.
-  - Validation framework for ontology definitions.
-  - CLI commands for ontology inspection and management.
-  - Extensible architecture for custom ontology formats.
-- Add comprehensive test coverage and documentation.
+- Implement ontology pack system supporting **TTL (standard)** and **Markdown (legacy)**:
+  - **TTL Ingestion**:
+    - Use `rdflib` to parse .ttl files
+    - Extract entities (rdfs:Class, owl:Class) with IRIs, labels, descriptions
+    - Extract relations (rdf:Property, owl:ObjectProperty) with domain/range constraints
+    - Build normalized `OntologySchema` from RDF graph
+  - **Markdown Ingestion** (backward compatible):
+    - Parse entities_extract/*.md files
+    - Generate synthetic IRIs (e.g., `urn:kg-forge:entity:Product`)
+    - Build `OntologySchema` for compatibility
+  - **OntologySchema Helpers**:
+    - `to_gliner_config()`: Generate entity labels + descriptions for GLiNER
+    - `to_glirel_config()`: Generate relation constraints for GLiREL
+    - `to_llm_prompt_snippet()`: Generate compact JSON for LLM prompts
+  - Dynamic loading and activation of ontology packs
+  - Validation framework for ontology definitions
+  - CLI commands for ontology inspection and management
+  - Extensible architecture for custom ontology formats
+- **Key Principle**: Raw TTL/Markdown never passed to extraction backends; only `OntologySchema`
+- Add comprehensive test coverage:
+  - TTL parsing and normalization
+  - Markdown parsing (legacy compatibility)
+  - Config generation for GLiNER, GLiREL, LLM
+  - Round-trip TTL → OntologySchema → configs
 
 ### Step 2 – Ontology Visualization
 
@@ -1163,17 +1591,20 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - Namespace-based markdown organization
   - CurationResult model validation
 - Add CLI flag --curator to select backend (default: docling).
+- Add CLI flag --chunking to control chunking (default: off, options: on|off).
+- When --chunking=on:
+  - CurationBackend must produce chunks array and save chunks.json
+  - Each chunk includes: chunk_id, doc_id, page, section, start_offset, end_offset, text
 - Stub hyland_ke_CurationBackend for future implementation.
 
-### Step 4 – Load Entity Definitions
+### Step 4 – Load Entity Definitions (Integrated with Step 1)
 
-- Implement loading of entity definitions from entities_extract/*.md.
-- Implement loading & merging of prompt_template.md with entity definitions.
-- Unit tests for:
-  - parsing ID, Name, Description, Relations, Examples,
-  - handling missing optional fields.
-- Add CLI command to:
-  - load entities and print them to stdout (for inspection).
+**Note**: This step is now integrated into Step 1 (Ontology Management & TTL Ingestion).
+
+- TTL ontology loading replaces direct entity definition loading
+- Markdown loading preserved for backward compatibility
+- All entity definitions normalized into `OntologySchema`
+- CLI commands for ontology inspection show both TTL and Markdown sources
 
 ### Step 5 – Neo4j Bootstrap
 
@@ -1191,14 +1622,14 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 ### Step 6a – Plug Extraction through LLM backend 
 
 - Implement LLMExtractionBackend:
-   - build prompt from:
+   - **Receives `OntologySchema` (not raw TTL or markdown)**
+   - Build prompt from:
        - curated text,
-       - merged prompt_template.md + entity definitions,
-
-   - call Bedrock via LlamaIndex client,
-   - parse model output into LexicalGraph:
-       - LexicalMentions with entity_type, surface, spans (if provided),
-       -  LexicalRelations.
+       - `ontology.to_llm_prompt_snippet()` → compact JSON with entities & relations
+   - Call Bedrock via LlamaIndex client
+   - Parse model output into LexicalGraph:
+       - LexicalMentions with entity_type, surface, spans (if provided)
+       - LexicalRelations
    - Implement parsing logic that:
        - validates JSON shape,
        - logs and skips malformed items,
@@ -1213,26 +1644,62 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 ### Step 6b – Plug Extraction through  GLiNER + GLiREL Lexical Backend
 
    - Implement SpacyLexicalBackend:
-      - load spacy model (nlp),
-      - load GLiNER model with ontology labels,
-      - load GLiREL model for relation extraction.
+      - **Receives `OntologySchema` (not raw TTL or markdown)**
+      - Load spacy model (nlp)
+      - Configure GLiNER with `ontology.to_gliner_config()`:
+        - Entity labels (e.g., "Product", "Team")
+        - Natural language descriptions for zero-shot NER
+      - Configure GLiREL with `ontology.to_glirel_config()`:
+        - Relation names (e.g., "WORKS_ON")
+        - Head/tail type constraints (e.g., Team → Product)
    - Pipeline:
-      - run nlp on curated text to get tokens and sentences,
-      - run GLiNER to get entity spans and types,
-      - map GLiNER spans back to spacy spans,
-      - build LexicalMentions with context and features,
-      - run GLiREL on text + entity spans to get relations,
-      - build LexicalRelations,
-      - return LexicalGraph.
+      - Run nlp on curated text to get tokens and sentences
+      - Run GLiNER to get entity spans and types (using ontology config)
+      - Map GLiNER spans back to spacy spans
+      - Build LexicalMentions with context and features
+      - Run GLiREL on text + entity spans to get relations (respecting ontology constraints)
+      - Build LexicalRelations
+      - Return LexicalGraph
     - Tests:
-      - use small fixtures with known entities/relations,
-      - verify LexicalGraph contains expected mentions and relations,
-      - ensure ontology labels are respected (no unknown types).
+      - Use small fixtures with known entities/relations
+      - Verify LexicalGraph contains expected mentions and relations
+      - Ensure ontology labels are respected (no unknown types)
+      - Test TTL → OntologySchema → GLiNER/GLiREL config pipeline
    - Config:
-      - support model names/paths via .env or CLI flags.
+      - Support model names/paths via .env or CLI flags
+
+### Step 6c – Plug Extraction through Hybrid Backend
+
+   - Implement HybridExtractionBackend:
+      - **Receives `OntologySchema` (not raw TTL or markdown)**
+      - Configure GLiNER with `ontology.to_gliner_config()` for entity detection
+      - Initialize Bedrock client for LLM calls
+   - Two-phase pipeline:
+      - **Phase 1 (GLiNER)**:
+        - Run GLiNER on curated text using `ontology.to_gliner_config()`
+        - Detect entities with zero-shot NER (ontology-guided, no label mapping needed)
+        - Build initial LexicalMentions with entity_type, surface, spans, confidence
+      - **Phase 2 (LLM)**:
+        - Build specialized prompt:
+          - Include detected entities from Phase 1
+          - Include `ontology.to_llm_prompt_snippet()` for relation constraints
+        - Call LLM to extract properties and relationships
+        - Merge GLiNER entities with LLM-extracted relations
+   - Graceful fallback:
+      - If LLM enrichment fails after retries, return entities-only graph
+      - Log LLM failures and track statistics
+   - Tests:
+      - Verify two-phase extraction works correctly
+      - Verify ontology types are used for GLiNER detection (from OntologySchema)
+      - Verify LLM enrichment with mocked responses
+      - Test fallback behavior when LLM fails
+      - Ensure output LexicalGraph contains both entities and relations
+      - Test TTL → OntologySchema → Hybrid extraction pipeline
+   - Config:
+      - Support gliner_model name, device, and LLM parameters via .env or CLI flags
 
 ### Step 7a – Plug Dedup Backend using Splink and Zingg
-  Input: a `LexicalGraph` produced by Step 6 (LLM or spacy backend).  
+  Input: a `LexicalGraph` produced by Step 6 (LLM, spacy, or hybrid backend).  
   Output: a `DedupedLexicalGraph` and a set of `CanonicalLexicalEntity` objects.
 
    -   Implement DedupBackend interface and concrete implementations:
@@ -1314,11 +1781,11 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
           -   borderline cases.
 
 
-### Step 7c – Ingest Pipeline Wiring (Dual Pipelines + Dedup + Linking)
+### Step 7c – Ingest Pipeline Wiring (Three Pipelines + Dedup + Linking)
 
     -   Implement full pipeline:
       -   read HTML → curate text → load ontology
-      -   run **selected** `ExtractionBackend` → `LexicalGraph`
+      -   run **selected** `ExtractionBackend` (llm, spacy, or hybrid) → `LexicalGraph`
       -   run **selected** `DedupBackend` → `DedupedLexicalGraph`
       -   run `EntityLinkerBackend` → link decisions
       - run `process_before_store` hook → possibly modified `DedupedLexicalGraph`
@@ -1332,12 +1799,12 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
         -   `--dry-run` (no writes, just log pipeline output),
         -   `--refresh` (skip unchanged docs by `content_hash`),
         -   `--namespace`, 
-        -   `--extractor [llm|spacy]` (default `llm`),
+        -   `--extractor [llm|spacy|hybrid]` (default `llm`),
         -   `--dedup-backend [none|splink|zingg|both]` (default `splink`)
     - Implement process_after_batch invocation.
     -   Add end-to-end tests:
         -   use fake extractors/dedup/linkers,
-        -   verify Neo4j content for both `llm` and `spacy` modes matches expectations.
+        -   verify Neo4j content for `llm`, `spacy`, and `hybrid` modes matches expectations.
 
 
 ### Step 8 – Graph Rendering

@@ -52,6 +52,7 @@ class IngestPipeline:
                  extractor: Optional[str] = None,
                  dedup_backend: Optional[str] = None,
                  fake_llm: bool = False,
+                 chunking_enabled: bool = False,
                  config: Optional[Settings] = None,
                  hook_registry: Optional[HookRegistry] = None):
         """
@@ -70,6 +71,7 @@ class IngestPipeline:
             extractor: Extraction backend (llm|spacy, default from config)
             dedup_backend: Deduplication backend (none|splink|zingg|both, default from config)
             fake_llm: Use fake LLM for testing
+            chunking_enabled: Enable document chunking for LLM context control
             config: Application configuration (uses default if None)
             hook_registry: Hook registry (uses global if None)
         """
@@ -79,6 +81,7 @@ class IngestPipeline:
         self.interactive_mode = interactive
         self.max_docs = max_docs
         self.fake_llm = fake_llm
+        self.chunking_enabled = chunking_enabled
         
         # Load configuration
         self.config = config or get_settings()
@@ -163,12 +166,29 @@ class IngestPipeline:
                 'fake_mode': fake_llm,
                 'spacy_model': "en_core_web_sm"
             }
+        elif self.extractor == "hybrid":
+            extraction_config = {
+                'gliner_model': "urchade/gliner_base",
+                'device': "cpu",
+                'llm_model_name': model or self.config.aws.bedrock_model_name,
+                'llm_region': self.config.aws.default_region,
+                'max_tokens': self.config.aws.bedrock_max_tokens,
+                'temperature': self.config.aws.bedrock_temperature,
+                'entity_confidence_threshold': 0.5,
+                'fake_mode': fake_llm
+            }
         else:  # fake backend
             extraction_config = {
                 'fake_mode': True
             }
         self.extraction_backend = create_extraction_backend(self.extractor, extraction_config)
-        self.active_ontology = active_pack
+        
+        # Load normalized OntologySchema from the active pack
+        # Extraction backends expect OntologySchema, not OntologyPack
+        self.active_ontology = active_pack.load_ontology_schema() if active_pack else None
+        
+        if not self.active_ontology:
+            logger.warning("No ontology schema loaded - extraction may fail")
         
         # Initialize deduplication backend
         dedup_config = {
@@ -407,11 +427,13 @@ class IngestPipeline:
             curation_result = self.curation_backend.curate(
                 source_path=file_path,
                 namespace=self.namespace,
-                markdown_base_dir=self.markdown_base_dir
+                markdown_base_dir=self.markdown_base_dir,
+                chunking_enabled=self.chunking_enabled
             )
             
+            chunk_info = f", chunks={len(curation_result.chunks)}" if curation_result.chunks else ""
             logger.info(f"Curated {doc_id}: {len(curation_result.curated_text)} chars, "
-                       f"format={curation_result.metadata.source_format}, pages={curation_result.metadata.page_count}")
+                       f"format={curation_result.metadata.source_format}, pages={curation_result.metadata.page_count}{chunk_info}")
             
             return curation_result
             
@@ -454,6 +476,9 @@ class IngestPipeline:
         """
         Extract entities from curated content.
         
+        If chunking is enabled and chunks are present, performs chunk-by-chunk extraction
+        and merges the results into a single document-level LexicalGraph.
+        
         Args:
             curation_result: CurationResult from curation backend
             doc_id: Document ID for this document
@@ -462,15 +487,55 @@ class IngestPipeline:
             LexicalGraph with extracted entities and relations
         """
         try:
-            # Use extraction backend to get lexical graph
-            lexical_graph = self.extraction_backend.extract(
-                content=curation_result.curated_text,
-                ontology=self.active_ontology,
-                doc_id=doc_id
-            )
+            # Check if we have chunks to process
+            if self.chunking_enabled and curation_result.chunks:
+                logger.info(f"Processing {len(curation_result.chunks)} chunks for {doc_id}")
+                
+                # Extract from each chunk and merge
+                merged_graph = None
+                for idx, chunk in enumerate(curation_result.chunks):
+                    logger.debug(f"Extracting from chunk {idx+1}/{len(curation_result.chunks)}: {chunk.chunk_id}")
+                    
+                    # Extract entities from this chunk
+                    chunk_graph = self.extraction_backend.extract(
+                        content=chunk.text,
+                        ontology=self.active_ontology,
+                        doc_id=chunk.chunk_id  # Use chunk_id for unique mention IDs
+                    )
+                    
+                    # Add chunk metadata to all mentions
+                    for mention in chunk_graph.mentions:
+                        mention.features['chunk_id'] = chunk.chunk_id
+                        if chunk.page is not None:
+                            mention.features['page'] = chunk.page
+                        if chunk.section:
+                            mention.features['section'] = chunk.section
+                    
+                    # Update doc_id to reference the document, not the chunk
+                    for mention in chunk_graph.mentions:
+                        mention.doc_id = doc_id
+                    
+                    # Merge into accumulated graph
+                    if merged_graph is None:
+                        merged_graph = chunk_graph
+                    else:
+                        merged_graph = merged_graph.merge(chunk_graph)
+                    
+                    logger.debug(f"Chunk {chunk.chunk_id}: {len(chunk_graph.mentions)} mentions, {len(chunk_graph.relations)} relations")
+                
+                logger.info(f"Merged extraction: {len(merged_graph.mentions)} total mentions, {len(merged_graph.relations)} total relations")
+                return merged_graph
             
-            logger.debug(f"Extracted {len(lexical_graph.mentions)} mentions, {len(lexical_graph.relations)} relations")
-            return lexical_graph
+            else:
+                # Normal extraction from full document
+                lexical_graph = self.extraction_backend.extract(
+                    content=curation_result.curated_text,
+                    ontology=self.active_ontology,
+                    doc_id=doc_id
+                )
+                
+                logger.debug(f"Extracted {len(lexical_graph.mentions)} mentions, {len(lexical_graph.relations)} relations")
+                return lexical_graph
             
         except Exception as e:
             logger.error(f"Entity extraction failed: {e}")

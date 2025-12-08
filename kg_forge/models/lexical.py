@@ -263,6 +263,40 @@ class LexicalGraph:
             'backend': self.metadata.get('backend', 'unknown'),
             'extraction_time': self.metadata.get('extraction_time'),
         }
+    
+    def merge(self, other: 'LexicalGraph') -> 'LexicalGraph':
+        """Merge another LexicalGraph into this one.
+        
+        Creates a new LexicalGraph containing all mentions and relations from both graphs.
+        Used to combine chunk-level extraction results into a document-level graph.
+        
+        Args:
+            other: Another LexicalGraph to merge
+        
+        Returns:
+            New LexicalGraph with combined mentions and relations
+        
+        Note:
+            - Mention and relation IDs must be unique across graphs
+            - Metadata from both graphs is merged (this graph takes precedence)
+        """
+        # Combine mentions and relations
+        merged_mentions = self.mentions + other.mentions
+        merged_relations = self.relations + other.relations
+        
+        # Merge metadata (this graph takes precedence)
+        merged_metadata = {**other.metadata, **self.metadata}
+        
+        # Track merge stats
+        if 'merged_graphs' not in merged_metadata:
+            merged_metadata['merged_graphs'] = 0
+        merged_metadata['merged_graphs'] += 1
+        
+        return LexicalGraph(
+            mentions=merged_mentions,
+            relations=merged_relations,
+            metadata=merged_metadata
+        )
 
 
 # Convenience functions for creating empty structures

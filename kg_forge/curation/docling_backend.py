@@ -1,6 +1,7 @@
 """Docling-based curation backend for multi-format document processing."""
 
 import hashlib
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Optional
 
 from kg_forge.curation.base import CurationBackend
 from kg_forge.curation.errors import CurationBackendError, UnsupportedFormatError
-from kg_forge.models.curation import CurationResult, DocumentMetadata
+from kg_forge.models.curation import CurationResult, DocumentChunk, DocumentMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,22 @@ class DoclingCurationBackend:
 
     SUPPORTED_FORMATS = {'.html', '.htm', '.pdf', '.docx', '.pptx'}
 
-    def __init__(self):
-        """Initialize Docling backend."""
+    def __init__(self, chunk_config: Optional[dict] = None):
+        """
+        Initialize Docling backend.
+        
+        Args:
+            chunk_config: Optional chunking configuration
+                - tokenizer: Tokenizer name (default: "Xenova/llama2-tokenizer")
+                - max_tokens: Max tokens per chunk (default: 400, GLiREL compatible)
+                - merge_peers: Merge small adjacent sections (default: True)
+        """
         self._backend_name = "docling"
+        self._chunk_config = chunk_config or {
+            "tokenizer": "Xenova/llama2-tokenizer",
+            "max_tokens": 400,  # GLiREL max is 512, use 400 for safety
+            "merge_peers": True
+        }
         
         # Lazy import to allow installation check
         try:
@@ -58,7 +72,8 @@ class DoclingCurationBackend:
         self,
         source_path: Path,
         namespace: str,
-        markdown_base_dir: Path
+        markdown_base_dir: Path,
+        chunking_enabled: bool = False
     ) -> CurationResult:
         """
         Curate document using Docling.
@@ -67,9 +82,10 @@ class DoclingCurationBackend:
             source_path: Path to source document
             namespace: Namespace for organizing output
             markdown_base_dir: Base directory for markdown output
+            chunking_enabled: Whether to produce document chunks
         
         Returns:
-            CurationResult with curated text, markdown path, and metadata
+            CurationResult with curated text, markdown path, metadata, and optional chunks
         
         Raises:
             UnsupportedFormatError: If format is not supported
@@ -119,11 +135,31 @@ class DoclingCurationBackend:
                 markdown_base_dir
             )
 
+            # Step 7: Generate chunks if requested
+            chunks = None
+            chunks_path = None
+            
+            if chunking_enabled:
+                try:
+                    chunks, chunks_path = self._create_chunks(
+                        result.document,
+                        doc_id,
+                        markdown_content,
+                        namespace,
+                        markdown_base_dir
+                    )
+                    logger.info(f"Created {len(chunks)} chunks for document: {doc_id}")
+                except Exception as e:
+                    logger.warning(f"Chunking failed for {doc_id}: {e}")
+                    warnings.append(f"Chunking failed: {str(e)}")
+
             # Create curation result
             curation_result = CurationResult(
                 doc_id=doc_id,
                 curated_text=markdown_content,
                 markdown_path=markdown_path,
+                chunks=chunks,
+                chunks_path=chunks_path,
                 metadata=metadata,
                 curation_backend=self.name,
                 curated_at=datetime.now(),
@@ -255,3 +291,104 @@ class DoclingCurationBackend:
         logger.debug(f"Saved markdown to: {markdown_path}")
 
         return markdown_path
+
+    def _create_chunks(
+        self,
+        docling_doc,
+        doc_id: str,
+        markdown_content: str,
+        namespace: str,
+        markdown_base_dir: Path
+    ) -> tuple[list[DocumentChunk], Path]:
+        """
+        Create document chunks using Docling's HybridChunker.
+        
+        Args:
+            docling_doc: Docling Document object
+            doc_id: Document ID
+            markdown_content: Full markdown content
+            namespace: Namespace for organization
+            markdown_base_dir: Base directory for markdown files
+        
+        Returns:
+            Tuple of (chunks list, chunks_path)
+        """
+        try:
+            from docling_core.transforms.chunker import HybridChunker
+        except ImportError as e:
+            raise CurationBackendError(
+                "docling-core not installed. Install with: pip install docling-core",
+                original_error=e
+            )
+
+        # Create chunker
+        chunker = HybridChunker(
+            tokenizer=self._chunk_config.get("tokenizer", "Xenova/llama2-tokenizer"),
+            max_tokens=self._chunk_config.get("max_tokens", 400),  # GLiREL compatible
+            merge_peers=self._chunk_config.get("merge_peers", True)
+        )
+
+        # Generate chunks
+        chunks = []
+        current_offset = 0
+        
+        for idx, chunk in enumerate(chunker.chunk(docling_doc)):
+            # chunk is a DocChunk object from docling_core
+            # Extract text content from the chunk
+            if hasattr(chunk, 'text'):
+                chunk_text = chunk.text
+            elif hasattr(chunk, 'content'):
+                chunk_text = chunk.content
+            else:
+                # Fallback: try to convert to string
+                chunk_text = str(chunk)
+            
+            # Calculate offsets in the full markdown
+            start_offset = current_offset
+            end_offset = current_offset + len(chunk_text)
+            current_offset = end_offset
+            
+            # Extract metadata from chunk
+            page = None
+            section = None
+            chunk_metadata = {}
+            
+            # Try to extract metadata from chunk attributes
+            if hasattr(chunk, 'meta'):
+                if hasattr(chunk.meta, 'page'):
+                    page = chunk.meta.page
+                if hasattr(chunk.meta, 'doc_items'):
+                    # Try to extract section from doc items
+                    for item in chunk.meta.doc_items:
+                        if hasattr(item, 'label') and 'section' in item.label.lower():
+                            section = str(item.text) if hasattr(item, 'text') else None
+                            break
+            
+            # Create DocumentChunk
+            doc_chunk = DocumentChunk(
+                chunk_id=f"{doc_id}_chunk_{idx+1:03d}",
+                doc_id=doc_id,
+                page=page,
+                section=section,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                text=chunk_text,
+                metadata=chunk_metadata
+            )
+            chunks.append(doc_chunk)
+        
+        # Save chunks to JSON file
+        namespace_dir = markdown_base_dir / namespace
+        namespace_dir.mkdir(parents=True, exist_ok=True)
+        chunks_path = namespace_dir / f"{doc_id}.chunks.json"
+        
+        # Serialize chunks to JSON
+        chunks_data = [chunk.model_dump() for chunk in chunks]
+        chunks_path.write_text(
+            json.dumps(chunks_data, indent=2, ensure_ascii=False),
+            encoding='utf-8'
+        )
+        
+        logger.debug(f"Saved {len(chunks)} chunks to: {chunks_path}")
+        
+        return chunks, chunks_path

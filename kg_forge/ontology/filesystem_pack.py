@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import List, Optional
 
 from .base import OntologyPack, OntologyPackInfo, StyleConfig
+from .schema import OntologySchema
+from .ttl_loader import TTLOntologyLoader
+from .markdown_loader import MarkdownOntologyLoader
 from kg_forge.entities.models import EntityDefinition
 from kg_forge.entities.definitions import EntityDefinitionLoader
 
@@ -19,6 +22,7 @@ class FilesystemOntologyPack(OntologyPack):
         """Initialize filesystem ontology pack."""
         super().__init__(pack_path)
         self._config: Optional[dict] = None
+        self._ontology_schema: Optional[OntologySchema] = None
     
     @property
     def info(self) -> OntologyPackInfo:
@@ -55,6 +59,47 @@ class FilesystemOntologyPack(OntologyPack):
         
         loader = EntityDefinitionLoader()
         return loader.load_entity_definitions(entities_dir)
+    
+    def load_ontology_schema(self) -> OntologySchema:
+        """Load and normalize ontology into OntologySchema.
+        
+        Auto-detects format:
+        - If .ttl files present: Use TTLOntologyLoader
+        - Else: Use MarkdownOntologyLoader (legacy)
+        
+        Returns:
+            Normalized OntologySchema
+        """
+        if self._ontology_schema is not None:
+            return self._ontology_schema
+        
+        # Check for TTL files (standard format)
+        ttl_files = list(self.pack_path.glob("*.ttl"))
+        entities_dir = self.pack_path / "entities"
+        
+        if ttl_files:
+            # TTL format (standard)
+            logger.info(f"Detected TTL ontology format in {self.pack_path}")
+            loader = TTLOntologyLoader()
+            
+            if len(ttl_files) == 1:
+                self._ontology_schema = loader.load_from_file(ttl_files[0])
+            else:
+                self._ontology_schema = loader.load_from_directory(self.pack_path)
+        
+        elif entities_dir.exists() and list(entities_dir.glob("*.md")):
+            # Markdown format (legacy)
+            logger.info(f"Detected Markdown ontology format in {self.pack_path}")
+            loader = MarkdownOntologyLoader()
+            self._ontology_schema = loader.load_from_directory(entities_dir)
+        
+        else:
+            raise ValueError(
+                f"No ontology files found in {self.pack_path}. "
+                "Expected either .ttl files or entities/*.md files."
+            )
+        
+        return self._ontology_schema
     
     def get_style_config(self) -> Optional[StyleConfig]:
         """Load style configuration from pack config."""

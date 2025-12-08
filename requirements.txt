@@ -13,6 +13,9 @@ markdownify>=0.11.0
 lxml>=4.9.0
 neo4j>=5.0.0
 
+# Ontology Processing
+rdflib>=7.0.0  # TTL/RDF parsing and SPARQL queries
+
 # LLM Integration
 llama-index>=0.10.0
 llama-index-llms-bedrock>=0.3.0

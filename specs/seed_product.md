@@ -51,12 +51,13 @@ We need a **fast, experimental way** to:
 
 ## 2. Vision
 
-Build a **CLI-based experimentation toolbox** (“KG Forge”) that lets us:
+Build a **CLI-based experimentation toolbox** ("KG Forge") that lets us:
 
 1. **Ingest** unstructured content from a filesystem export.
 2. **Extract entities and topics** using **pluggable extraction backends**:
-   - an LLM-based pipeline driven by markdown definitions, and
-   - a spaCy + GLiNER + GLiREL lexical graph pipeline.
+   - an **LLM-based pipeline** driven by markdown definitions (full LLM extraction),
+   - a **spaCy + GLiNER + GLiREL lexical graph pipeline** (zero-shot NER + relation extraction), and
+   - a **Hybrid pipeline** (GLiNER ontology-aware NER + LLM for properties and relations).
 3. **Deduplicate & canonicalize entities** using configurable ER backends (initially Splink, later Zingg).
 4. **Link** canonical entities to an ontology-backed Knowledge Graph in Neo4j.
 5. **Query** for entities, documents, and relationships within a given experiment namespace.
@@ -107,11 +108,12 @@ It is **not** a production service; it is an **experiment platform** that helps 
 
 3. **Compare extraction and dedup strategies**
    - Run the same corpus with:
-     - `--extractor llm` vs `--extractor spacy`,
+     - `--extractor llm` vs `--extractor spacy` vs `--extractor hybrid`,
      - `--dedup-backend none` vs `--dedup-backend splink`.
    - Compare:
      - what entities are found,
      - how noisy they are,
+     - extraction speed and API costs (LLM tokens),
      - and how stable canonical entities are across runs.
 
 4. **Discover patterns and gaps**
@@ -148,13 +150,15 @@ v1 is a **single-machine CLI tool** focused on Filesystem folder of documents an
 - **Core Commands**
   - `ingest`
     - Read and curate text from various document formats (HTML, PDF, etc.).
+    - Optionally chunk documents into smaller segments via `--chunking=on|off` (default: off).
     - Extract entities/topics (and relations) using a selected extraction backend:
-      - `--extractor llm` (LLM-based),
-      - `--extractor spacy` (spaCy + GLiNER + GLiREL).
+      - `--extractor llm` (full LLM-based extraction),
+      - `--extractor spacy` (spaCy + GLiNER + GLiREL zero-shot pipeline),
+      - `--extractor hybrid` (GLiNER ontology-aware NER + LLM for properties/relations).
     - Run deduplication via a selected backend:
       - `--dedup-backend none|splink` (Zingg is planned later).
     - Link canonical entities to a Neo4j graph, backed by the ontology.
-    - Respect `--namespace`, `--dry-run`, `--refresh`, and basic model/prompt overrides.
+    - Respect `--namespace`, `--dry-run`, `--refresh`, `--chunking`, and basic model/prompt overrides.
 
   - `query`
     - List entity types, entities, and docs for a given namespace.
@@ -179,13 +183,27 @@ v1 is a **single-machine CLI tool** focused on Filesystem folder of documents an
   - `neo4j-start` / `neo4j-stop`
     - Convenience commands to start/stop a local Neo4j instance for experiments.
 
-- **Ontology Management (Experimental)**
-  - Entity-type definitions + examples in markdown files (`entities_extract/*.md`).
-  - Relations between entity types defined in markdown.
+- **Ontology Management (Standard & Legacy Formats)**
+  - **TTL (Turtle) ontology files** (.ttl) as the **standard format**:
+    - Industry-standard RDF/OWL ontology definitions.
+    - Entity types as rdfs:Class or owl:Class with IRIs, labels, and descriptions.
+    - Relation types as rdf:Property or owl:ObjectProperty with domain/range constraints.
+    - Parsed with rdflib and normalized to internal OntologySchema.
+  - **Markdown ontology files** (.md) as **legacy format** (backward compatible):
+    - Entity-type definitions + examples in `entities_extract/*.md`.
+    - Relations between entity types defined in markdown.
+  - **Normalized Internal Representation (OntologySchema)**:
+    - Both TTL and Markdown formats normalized to same internal schema.
+    - Helper methods generate backend-specific configs:
+      - GLiNER config (entity labels + descriptions)
+      - GLiREL config (relation constraints)
+      - LLM prompt snippets (compact JSON)
   - Ontology used as:
-    - input for LLM prompts, and
-    - label set / relation schema for the spaCy pipeline.
-  - Ability to export graph entities back into markdown for curation.
+    - input for LLM prompts (via helper methods),
+    - label set / relation schema for the spaCy + GLiNER + GLiREL pipeline (via helper methods),
+    - entity types for GLiNER detection in hybrid pipeline (via helper methods).
+  - **Strict Separation Principle**: Raw TTL/Markdown never passed to extraction backends; only normalized OntologySchema.
+  - Ability to export graph entities back into markdown for curation (TTL export planned for future).
 
 - **Experimentation Controls**
   - **Namespaces** to isolate experiments within the same Neo4j DB.
@@ -215,12 +233,74 @@ v1 is a **single-machine CLI tool** focused on Filesystem folder of documents an
 
 ## 5. Key Concepts
 
-### 5.1 Document
+### 5.1 Document & Chunking
+
+#### Document
 
 - One curated unit of content.
 - Identified by a stable `doc_id` derived from file path.
 - Represented in the graph as a `:Doc` node.
 - Has relationships to entities it mentions (and optionally additional metadata).
+
+#### Chunking (Optional)
+
+**Why Chunking?**
+
+For large documents, processing the entire text in a single pass can lead to:
+- **LLM context limitations**: Large documents may exceed token limits or degrade extraction quality.
+- **Poor extraction precision**: Entities and relationships far apart in the document may not be connected properly.
+- **Difficulty in scoring**: Hard to attribute entity mentions to specific sections or track provenance.
+
+Chunking addresses these issues by breaking documents into smaller, manageable pieces that:
+- fit comfortably within LLM context windows,
+- maintain section/heading context for better semantic understanding,
+- enable fine-grained provenance tracking (which chunk, which page, which section).
+
+**How to Enable/Disable Chunking**
+
+Chunking is controlled via the `--chunking` CLI flag during ingestion:
+
+- `--chunking=off` (default): Process entire document as one unit. Output is a single markdown file per document.
+- `--chunking=on`: Enable chunking. Document is split into chunks, and two artifacts are produced per document.
+
+Future iterations may support advanced chunking modes (e.g., `--chunking=semantic` for semantic-based splitting), but v1 focuses on simple size/structure-based chunking.
+
+**Artifacts Produced When Chunking is ON**
+
+When `--chunking=on` is specified, the curation/ingestion pipeline produces **two artifacts per document**:
+
+1. **`<doc_id>.md`** – A "pure markdown" full-document representation
+   - Complete markdown conversion of the original document
+   - Used for reference and full-text search
+   - Preserves document structure (headings, sections, formatting)
+
+2. **`<doc_id>.chunks.json`** – A JSON file containing an array of document chunks
+   - Each chunk is a JSON object with the following required fields:
+     ```json
+     {
+       "chunk_id": "unique_chunk_identifier",
+       "doc_id": "parent_document_id",
+       "page": 5,                    // page number if available, null otherwise
+       "section": "Architecture Overview",  // section/heading if available, null otherwise
+       "start_offset": 1024,         // character offset in the full markdown
+       "end_offset": 2048,           // character offset in the full markdown
+       "text": "chunk content here..." // the actual chunk text
+     }
+     ```
+
+**Downstream Processing with Chunks**
+
+When chunking is enabled:
+- **Entity extraction** works chunk-by-chunk, processing each chunk object independently.
+- **Graph construction** links entities to both:
+  - the parent `:Doc` node, and
+  - optionally to chunk-level metadata (page, section) for fine-grained provenance.
+- **Deduplication** still operates at the entity level across all chunks and documents.
+
+This allows extraction backends to:
+- process smaller, focused text segments,
+- maintain context from section/heading information,
+- provide better entity-to-location mapping for downstream analysis.
 
 ### 5.2 Entity / Topic
 
@@ -244,11 +324,40 @@ The system is responsible for:
 - The ontology is the set of:
   - entity types,
   - allowed relationships between them,
-  - and curated examples.
-- It is expressed as markdown files in a folder (e.g. `entities_extract/`), plus a prompt template.
+  - and curated examples (for markdown format).
+
+- **Standard Format: TTL (Turtle)**
+  - Industry-standard RDF/OWL ontology files (.ttl).
+  - Entity types defined as rdfs:Class or owl:Class with:
+    - Unique IRIs (e.g., `http://example.org/ont#Product`)
+    - Labels (rdfs:label) for display names
+    - Descriptions (rdfs:comment) for natural language definitions
+    - Optional properties (datatype and object properties)
+  - Relation types defined as rdf:Property or owl:ObjectProperty with:
+    - Unique IRIs (e.g., `http://example.org/ont#worksOn`)
+    - Domain constraints (rdfs:domain) for allowed source entity types
+    - Range constraints (rdfs:range) for allowed target entity types
+    - Labels and descriptions for documentation
+  - Parsed using rdflib and normalized to internal OntologySchema.
+
+- **Legacy Format: Markdown**
+  - Entity definitions in markdown files (e.g., `entities_extract/`) plus a prompt template.
+  - Supported for backward compatibility only.
+  - New ontologies should use TTL format.
+
+- **Normalized Internal Representation**
+  - Both TTL and Markdown formats are ingested and normalized to OntologySchema.
+  - OntologySchema provides helper methods to generate backend-specific configs:
+    - `to_gliner_config()`: Entity labels + descriptions for zero-shot NER
+    - `to_glirel_config()`: Relation constraints for relation extraction
+    - `to_llm_prompt_snippet()`: Compact JSON for LLM prompts
+  - **Raw ontology files never passed to extraction backends** - only normalized OntologySchema.
+
 - The ontology is used to:
-  - drive LLM extraction (via merged prompt),
-  - provide label sets and relation schema for the spaCy+GLiNER+GLiREL pipeline,
+  - drive LLM extraction (via `ontology.to_llm_prompt_snippet()` helper),
+  - provide label sets and relation schema for the spaCy+GLiNER+GLiREL pipeline (via `to_gliner_config()` and `to_glirel_config()` helpers),
+  - provide entity types for GLiNER detection in the hybrid pipeline (via `to_gliner_config()` helper),
+  - drive LLM enrichment in the hybrid pipeline (via `to_llm_prompt_snippet()` helper),
   - shape the resulting knowledge graph (entity_type and relationship direction).
 
 ### 5.4 Namespace / Experiment
@@ -272,14 +381,23 @@ The system is responsible for:
   - know which namespace was affected.
 
 - I can choose:
-  - an **extraction backend** (`--extractor llm|spacy`),
+  - an **extraction backend** (`--extractor llm|spacy|hybrid`),
+    - `llm`: Full LLM-based extraction (highest quality, highest cost, ~5-10s/doc),
+    - `spacy`: Zero-shot GLiNER+GLiREL pipeline (fastest, local, ~1-2s/doc),
+    - `hybrid`: GLiNER ontology-aware NER + LLM enrichment (balanced quality/cost/speed, ~3-6s/doc),
   - a **dedup backend** (`--dedup-backend none|splink`),
+  - a **chunking mode** (`--chunking on|off`, default: off),
   - a **namespace** (`--namespace`) to isolate the run.
 
 - I can:
   - **skip unchanged** documents based on a content hash,
   - **force re-processing** via a flag (`--refresh`),
   - **run in dry-run mode** to only test extraction/dedup/linking and configuration.
+
+- When chunking is enabled (`--chunking=on`):
+  - Each document produces two artifacts: `<doc_id>.md` and `<doc_id>.chunks.json`.
+  - Entity extraction processes chunks individually for better LLM context control.
+  - I can see chunk-level provenance (page, section) in extraction logs and results.
 
 - When ingestion finishes, I can:
   - see a concise summary (entities, docs, key warnings),
@@ -315,13 +433,16 @@ The system is responsible for:
 ### 6.4 Ontology Round-Trip
 
 - As a user, I can:
-  - define entity types and relations in markdown.
+  - **define entity types and relations in TTL** (standard format) or markdown (legacy format).
+  - **auto-detect ontology format** - system automatically detects TTL vs Markdown and normalizes to OntologySchema.
   - re-run ingestion (possibly in a new namespace) to see how they impact graph structure.
   - export discovered entities back into markdown files (`export-entities`) for review and curation.
+    - (TTL export planned for future iterations)
 
 - The ontology round-trip should be simple enough that:
   - ontology changes can be reviewed in git,
-  - experiments can be repeated with slightly updated ontologies.
+  - experiments can be repeated with slightly updated ontologies,
+  - ontologies can be shared and versioned using industry-standard RDF/OWL formats.
 
 ### 6.5 Extensibility & Hooks
 
@@ -379,9 +500,13 @@ We will consider v1 successful if:
      - de-duplicated into sensible canonical entities,
      - useful for navigation and analysis.
    - Users can qualitatively compare at least:
-     - `llm` vs `spacy` extractor,
+     - `llm` vs `spacy` vs `hybrid` extractors,
      - dedup vs no-dedup,
-     and articulate pros/cons.
+     and articulate pros/cons in terms of:
+       - extraction accuracy (precision/recall of entities and relations),
+       - processing speed (documents per second),
+       - API costs (LLM token usage),
+       - robustness (handling of edge cases, graceful degradation).
 
 3. **Graph Exploration**
    - At least a handful of real questions about our engineering landscape

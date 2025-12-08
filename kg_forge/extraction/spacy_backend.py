@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional, Set
 import logging
 
 from kg_forge.models.lexical import LexicalGraph, LexicalMention, LexicalRelation
-from kg_forge.ontology.base import OntologyPack
+from kg_forge.ontology.schema import OntologySchema
 from kg_forge.extraction.interface import BaseExtractionBackend
 from kg_forge.extraction.exceptions import (
     ExtractionError,
@@ -123,12 +123,12 @@ class SpacyLexicalBackend(BaseExtractionBackend):
             logger.error(f"Failed to initialize spaCy backend: {e}")
             raise BackendNotAvailableError(f"spaCy backend initialization failed: {e}")
     
-    def _do_extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
+    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
         """Perform spaCy-based extraction.
         
         Args:
             content: Curated document content
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
             doc_id: Document identifier
         
         Returns:
@@ -223,24 +223,18 @@ class SpacyLexicalBackend(BaseExtractionBackend):
             
             raise ExtractionError(f"spaCy extraction failed for {doc_id}: {e}")
     
-    def _get_entity_types_from_ontology(self, ontology: OntologyPack) -> List[str]:
-        """Extract entity type labels for GLiNER.
+    def _get_entity_types_from_ontology(self, ontology: OntologySchema) -> List[str]:
+        """Extract entity type labels for GLiNER using ontology helper.
         
         Args:
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
         
         Returns:
             List of entity type strings for GLiNER
         """
-        definitions = ontology.get_entity_definitions()
-        entity_types = []
-        
-        for definition in definitions:
-            # Use the entity name or ID as the label
-            label = definition.name or definition.entity_id
-            # Convert to lowercase for GLiNER
-            label = label.lower().replace("_", " ")
-            entity_types.append(label)
+        # Use OntologySchema.to_gliner_config() helper method
+        gliner_config = ontology.to_gliner_config()
+        entity_types = list(gliner_config.keys())
         
         logger.debug(f"Extracted entity types for GLiNER", extra={
             "entity_types": entity_types,
@@ -249,26 +243,18 @@ class SpacyLexicalBackend(BaseExtractionBackend):
         
         return entity_types
     
-    def _get_relation_types_from_ontology(self, ontology: OntologyPack) -> List[str]:
-        """Extract relation type labels for GLiREL.
+    def _get_relation_types_from_ontology(self, ontology: OntologySchema) -> List[str]:
+        """Extract relation type labels for GLiREL using ontology helper.
         
         Args:
-            ontology: Active ontology pack
+            ontology: Normalized ontology schema
         
         Returns:
             List of relation type strings for GLiREL
         """
-        definitions = ontology.get_entity_definitions()
-        relation_types = set()
-        
-        for definition in definitions:
-            if definition.relations:
-                for relation in definition.relations:
-                    # Convert to lowercase for GLiREL
-                    rel_label = relation.to_label.lower().replace("_", " ")
-                    relation_types.add(rel_label)
-        
-        relation_list = list(relation_types)
+        # Use OntologySchema.to_glirel_config() helper method
+        glirel_config = ontology.to_glirel_config()
+        relation_list = list(glirel_config.keys())
         
         logger.debug(f"Extracted relation types for GLiREL", extra={
             "relation_types": relation_list,

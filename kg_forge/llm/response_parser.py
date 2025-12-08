@@ -92,7 +92,9 @@ class ResponseParser:
                 "response_preview": response_text[:500] if response_text else "EMPTY_RESPONSE",
                 "response_is_empty": not response_text.strip() if response_text else True
             })
-            raise ParseError(error_msg)
+            # Return empty graph instead of raising error for invalid JSON
+            logger.warning(f"Returning empty graph due to invalid JSON", extra={"doc_id": self.doc_id})
+            return LexicalGraph(mentions=[], relations=[], metadata={"error": "invalid_json"})
         
         except (KeyError, TypeError, ValueError) as e:
             error_msg = f"Invalid response structure: {e}"
@@ -402,6 +404,12 @@ class ResponseParser:
         
         if not src_mention_id or not dst_mention_id:
             logger.warning(f"Could not link relation to mentions: {source_name} -> {target_name}",
+                         extra={"doc_id": self.doc_id})
+            return None
+        
+        # Skip self-loop relations (source == destination)
+        if src_mention_id == dst_mention_id:
+            logger.warning(f"Skipping self-loop relation: {source_name} -> {target_name}",
                          extra={"doc_id": self.doc_id})
             return None
         

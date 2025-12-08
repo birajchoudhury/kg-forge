@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml)
 ![Coverage](https://raw.githubusercontent.com/birajchoudhury/kg-forge/badges/.github/coverage.svg)
-![Tests](https://img.shields.io/badge/tests-475%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-493%20passed-brightgreen)
 
 A comprehensive CLI tool for building knowledge graphs from unstructured documents. Extract entities and relationships using flexible curation and extraction backends, with built-in deduplication and interactive graph visualization.
 
@@ -13,12 +13,16 @@ Knowledge Graph Forge is a powerful command-line tool that transforms unstructur
 ### Key Features
 
 - **Flexible Document Curation**: Choose between Docling (local, fast) or Hyland Knowledge Enrichment (cloud-based, optimized)
-- **Dual Extraction Pipelines**: LLM-based extraction (AWS Bedrock) or neural NLP pipelines (spaCy + GLiNER + GLiREL)
+- **Multiple Extraction Pipelines**: 
+  - **LLM-based**: Full entity and relation extraction using AWS Bedrock
+  - **Neural NLP**: Zero-shot extraction with spaCy + GLiNER + GLiREL (no training required)
+  - **Hybrid**: Combines GLiNER entity detection with LLM property/relation enrichment
+- **Industry-Standard Ontologies**: Support for both TTL (Turtle/RDF) and Markdown ontology formats
 - **Advanced Entity Deduplication**: Built-in support for Splink (probabilistic) and Zingg (ML-based) deduplication
-- **Ontology Management**: Define entity types, relationships, and extraction rules using modular ontology packs
+- **Ontology Management**: Define entity types, relationships, and extraction rules using modular, swappable ontology packs
 - **Interactive Visualization**: Generate beautiful HTML visualizations of knowledge graphs and ontologies
 - **Neo4j Integration**: Full Neo4j support with namespace isolation for multi-tenant experimentation
-- **Production Ready**: Comprehensive test suite (475+ tests) with both unit and integration testing
+- **Production Ready**: Comprehensive test suite (493+ tests) with both unit and integration testing
 
 The tool addresses key challenges in knowledge graph construction:
 - How to curate and extract meaningful entities from diverse document formats (HTML, PDF, DOCX, TXT, XML)
@@ -52,7 +56,8 @@ kg_forge/
 │   ├── extraction/              # Entity extraction backends
 │   │   ├── interface.py         # Common interfaces
 │   │   ├── llm_backend.py       # LLM-based extraction
-│   │   ├── spacy_backend.py     # Neural NLP pipeline
+│   │   ├── spacy_backend.py     # Neural NLP pipeline (GLiNER + GLiREL)
+│   │   ├── hybrid_backend.py    # Hybrid GLiNER + LLM extraction
 │   │   ├── fake_backend.py      # Testing backend
 │   │   └── exceptions.py        # Extraction exceptions
 │   ├── llm/                     # LLM integrations
@@ -80,6 +85,9 @@ kg_forge/
 │   ├── ontology/                # Ontology management system
 │   │   ├── base.py              # Base classes and registry
 │   │   ├── filesystem_pack.py   # File-based ontology packs
+│   │   ├── schema.py            # Normalized OntologySchema representation
+│   │   ├── ttl_loader.py        # TTL/RDF ontology loader (industry standard)
+│   │   ├── markdown_loader.py   # Markdown ontology loader (legacy)
 │   │   └── models.py            # Ontology data models (deprecated, use entities/)
 │   ├── entities/                # Entity definition system
 │   │   ├── definitions.py       # Entity definition loader
@@ -183,9 +191,10 @@ kg_forge/
 - **For document curation** (choose one or both):
   - **Docling**: Local processing (included in dependencies, no credentials needed)
   - **Hyland Knowledge Enrichment**: Cloud API (requires OAuth credentials - see Configuration)
-- **For entity extraction** (choose one):
+- **For entity extraction** (choose one or combine):
   - **LLM-based**: AWS account with Bedrock access (requires AWS credentials)
-  - **Neural NLP**: spaCy + GLiNER + GLiREL models (auto-downloads ~3.5GB on first use)
+  - **Neural NLP**: spaCy + GLiNER + GLiREL models (auto-downloads ~3.5GB on first use, no credentials)
+  - **Hybrid**: Combines GLiNER entity detection with LLM property extraction (requires AWS credentials)
 
 ### Setup
 
@@ -258,11 +267,11 @@ kg-forge parse --source /path/to/documents/
 # Test extraction on a single document
 kg-forge extract-test sample.html --backend llm
 
-# Run full ingestion pipeline (Docling + Bedrock)
+# Run full ingestion pipeline (Docling + Bedrock LLM)
 kg-forge ingest --source /path/to/documents/ --curator docling --extractor llm
 
-# Or use Hyland KE for curation
-kg-forge ingest --source /path/to/documents/ --curator hylandKE --extractor llm
+# Use Hyland KE for curation with hybrid extraction
+kg-forge ingest --source /path/to/documents/ --curator hyland_ke --extractor hybrid
 
 # Query results
 kg-forge query list-types
@@ -274,11 +283,14 @@ kg-forge render --out my_graph.html
 
 ### 4. Try Different Backend Combinations
 ```bash
-# Fast local processing: Docling + spaCy
+# Fast local processing: Docling + spaCy (no API calls)
 kg-forge ingest --source /path/to/documents/ --curator docling --extractor spacy
 
-# Cloud-optimized: Hyland KE + Bedrock
-kg-forge ingest --source /path/to/documents/ --curator hylandKE --extractor llm
+# Cloud-optimized: Hyland KE + LLM
+kg-forge ingest --source /path/to/documents/ --curator hyland_ke --extractor llm
+
+# Best of both: Hyland KE + Hybrid (GLiNER precision + LLM enrichment)
+kg-forge ingest --source /path/to/documents/ --curator hyland_ke --extractor hybrid
 
 # Compare results across namespaces
 kg-forge query list-entities --namespace default --type Product
@@ -298,8 +310,11 @@ kg-forge ingest --source <path/to/documents>
 # Use Hyland Knowledge Enrichment for curation
 kg-forge ingest --source <path> --curator hyland_ke --extractor llm
 
-# Use neural NLP pipeline (spaCy + GLiNER + GLiREL)
+# Use neural NLP pipeline (spaCy + GLiNER + GLiREL, all local)
 kg-forge ingest --source <path> --curator docling --extractor spacy
+
+# Use hybrid extraction (GLiNER + LLM enrichment)
+kg-forge ingest --source <path> --curator hyland_ke --extractor hybrid
 
 # Configure deduplication backend
 kg-forge ingest --source <path> --dedup-backend splink  # or zingg/both/none
@@ -397,6 +412,12 @@ kg-forge ontology validate --pack-dir custom_ontology/
 # Discover and register new ontology packs
 kg-forge ontology discover --directory /path/to/ontologies/
 ```
+
+**Ontology Format Support:**
+- **TTL (Turtle/RDF)**: Industry-standard format using RDF/OWL semantics (`.ttl` files)
+- **Markdown**: Legacy format for simple entity definitions (`entities/*.md` files)
+- Automatic format detection based on files present in ontology pack
+- Both formats normalized to common `OntologySchema` for consistent extraction
 
 #### Export/Import Operations
 ```bash
@@ -550,7 +571,7 @@ The integration tests cover:
 
 **Core Pipeline Architecture**
 - Flexible document curation: Docling (local, fast) and Hyland KE (cloud-based, optimized)
-- Dual extraction backends: LLM-based (AWS Bedrock) and neural NLP (spaCy + GLiNER + GLiREL)
+- Multiple extraction backends: LLM-based (AWS Bedrock), neural NLP (spaCy + GLiNER + GLiREL), and Hybrid (GLiNER + LLM)
 - Advanced deduplication: Splink (probabilistic) and Zingg (ML-based) backends
 - Entity linking and canonical entity management
 - Complete ingestion pipeline with hooks and extensibility
@@ -569,10 +590,12 @@ The integration tests cover:
 - Comprehensive query and manipulation capabilities
 
 **Ontology System**
-- Flexible ontology pack system for entity type definitions
+- Industry-standard TTL (Turtle/RDF) ontology support with automatic parsing
+- Legacy Markdown format support for backward compatibility
+- Automatic format detection and normalization to unified `OntologySchema`
+- Backend-specific config generation (GLiNER, GLiREL, LLM prompts)
 - Dynamic ontology activation and validation
-- Prompt template merging for LLM extraction
-- Entity relationship schema management
+- Entity relationship schema management with domain/range constraints
 
 **Visualization & Export**
 - Interactive knowledge graph visualization (vis.js)
@@ -582,7 +605,7 @@ The integration tests cover:
 
 **Developer Experience**  
 - Comprehensive CLI with 15+ commands
-- Extensive test suite (387+ tests) with 100% CI/CD pipeline
+- Extensive test suite (493+ tests) with 100% CI/CD pipeline
 - Docker integration for Neo4j
 - Rich configuration management (YAML + environment variables)
 - Detailed logging and error handling
@@ -598,10 +621,13 @@ kg-forge parse --source ~/documents/
 # Fast local processing (Docling + LLM)
 kg-forge ingest --source ~/documents/ --curator docling --extractor llm --dedup-backend splink
 
-# Cloud-optimized processing (Hyland KE + Bedrock)
+# Cloud-optimized processing (Hyland KE + LLM)
 kg-forge ingest --source ~/documents/ --curator hyland_ke --extractor llm --dedup-backend splink
 
-# Neural NLP pipeline for higher precision (all local, no API calls)
+# Best of both worlds: Hybrid extraction (GLiNER precision + LLM enrichment)
+kg-forge ingest --source ~/documents/ --curator hyland_ke --extractor hybrid --dedup-backend splink
+
+# Neural NLP pipeline for complete local processing (no API calls)
 kg-forge ingest --source ~/documents/ --curator docling --extractor spacy --dedup-backend zingg
 ```
 
@@ -623,7 +649,7 @@ Use namespaces to compare different backend combinations:
 ```bash
 # Test different curation and extraction approaches
 kg-forge ingest --source ~/docs/ --namespace docling_llm --curator docling --extractor llm
-kg-forge ingest --source ~/docs/ --namespace hyland_llm --curator hyland_ke --extractor llm
+kg-forge ingest --source ~/docs/ --namespace hyland_hybrid --curator hyland_ke --extractor hybrid
 kg-forge ingest --source ~/docs/ --namespace docling_spacy --curator docling --extractor spacy
 
 # Compare results
@@ -658,7 +684,7 @@ kg-forge render --namespace production --out results.html
 ### Architecture
 
 **Extraction Pipeline Architecture:**
-- `ExtractionBackend` interface with LLM and spaCy implementations
+- `ExtractionBackend` interface with LLM, spaCy, and Hybrid implementations
 - `DedupBackend` interface supporting Splink, Zingg, and ensemble methods
 - `EntityLinkerBackend` for canonical entity resolution
 - Extensible hook system for custom processing logic
@@ -670,8 +696,11 @@ kg-forge render --namespace production --out results.html
 
 **Ontology Management:**
 - `OntologyPack` system for modular entity definitions
+- Support for TTL (Turtle/RDF) and Markdown ontology formats
+- `OntologySchema` normalization layer for backend-agnostic extraction
 - Registry-based discovery and activation
 - Filesystem-based ontology storage with validation
+- Helper methods for generating backend-specific configs (GLiNER, GLiREL, LLM)
 
 **Key Design Decisions:**
 - Modular backend system for easy experimentation

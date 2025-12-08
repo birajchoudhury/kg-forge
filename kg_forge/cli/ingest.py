@@ -63,7 +63,7 @@ logger = get_logger(__name__)
 )
 @click.option(
     "--extractor",
-    type=click.Choice(["llm", "spacy"], case_sensitive=False),
+    type=click.Choice(["llm", "spacy", "hybrid"], case_sensitive=False),
     help="Extraction backend (default from config)"
 )
 @click.option(
@@ -75,6 +75,12 @@ logger = get_logger(__name__)
     "--fake-llm", 
     is_flag=True,
     help="Use fake LLM for testing (no API calls)"
+)
+@click.option(
+    "--chunking",
+    type=click.Choice(["on", "off"], case_sensitive=False),
+    default="off",
+    help="Enable document chunking for LLM context control (default: off)"
 )
 def ingest(
     source: Path,
@@ -88,7 +94,8 @@ def ingest(
     curator: Optional[str] = None,
     extractor: Optional[str] = None,
     dedup_backend: Optional[str] = None,
-    fake_llm: bool = False
+    fake_llm: bool = False,
+    chunking: str = "off"
 ) -> None:
     """
     Ingest document files from source directory into knowledge graph.
@@ -96,10 +103,11 @@ def ingest(
     This command runs the complete ingest pipeline:
     1. Discovers document files (HTML, PDF, DOCX, PPTX) in source directory
     2. Curates documents to markdown using configurable backend
-    3. Extracts entities using configurable backend (LLM or spaCy)
-    4. Applies deduplication using configurable backend (Splink/Zingg/none)
-    5. Stores documents and entities in Neo4j
-    6. Creates relationships between entities
+    3. Optionally chunks documents for LLM context control (--chunking=on)
+    4. Extracts entities using configurable backend (LLM or spaCy)
+    5. Applies deduplication using configurable backend (Splink/Zingg/none)
+    6. Stores documents and entities in Neo4j
+    7. Creates relationships between entities
     
     SOURCE: Root directory containing document files to process
     """
@@ -128,6 +136,8 @@ def ingest(
             console.print("[cyan]Mode: INTERACTIVE (hooks enabled)[/cyan]")
         if curator:
             console.print(f"Curator: {curator}")
+        if chunking == "on":
+            console.print("[cyan]Chunking: ENABLED (chunk-by-chunk extraction)[/cyan]")
         if fake_llm:
             console.print("[cyan]LLM: FAKE (testing mode)[/cyan]")
         elif model:
@@ -151,6 +161,7 @@ def ingest(
             extractor=extractor,
             dedup_backend=dedup_backend,
             fake_llm=fake_llm,
+            chunking_enabled=(chunking == "on"),
             config=config
         )
         

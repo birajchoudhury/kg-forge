@@ -7,20 +7,19 @@ from pathlib import Path
 from typing import Dict, Any, List
 import logging
 
-from kg_forge.ontology.base import OntologyPack
-from kg_forge.entities.definitions import EntityDefinition
+from kg_forge.ontology.schema import OntologySchema
 
 logger = logging.getLogger(__name__)
 
 
 class PromptBuilder:
-    """Builds extraction prompts from ontology and templates."""
+    """Builds extraction prompts from ontology schema."""
     
-    def __init__(self, ontology: OntologyPack):
-        """Initialize prompt builder with ontology pack.
+    def __init__(self, ontology: OntologySchema):
+        """Initialize prompt builder with ontology schema.
         
         Args:
-            ontology: Active ontology pack with entity definitions
+            ontology: Normalized ontology schema with entity and relation definitions
         """
         self.ontology = ontology
     
@@ -39,15 +38,16 @@ class PromptBuilder:
         if prompt_template is None:
             prompt_template = self._get_default_template()
         
-        # Build entity definitions section
-        entity_definitions_text = self._build_entity_definitions_section()
+        # Use OntologySchema helper method to generate JSON snippet
+        entity_definitions_text = self.ontology.to_llm_prompt_snippet()
         
         # Replace placeholders in template
         prompt = prompt_template.replace("{{ENTITY_TYPE_DEFINITIONS}}", entity_definitions_text)
         prompt = prompt.replace("{{DOCUMENT_CONTENT}}", document_content)
         
         logger.debug(f"Built extraction prompt: {len(prompt)} characters", extra={
-            "definitions_count": len(self.ontology.get_entity_definitions()),
+            "entity_types": len(self.ontology.entities),
+            "relation_types": len(self.ontology.relations),
             "document_length": len(document_content)
         })
         
@@ -105,56 +105,6 @@ Extract entities and relationships from the provided document according to the e
   ]
 }"""
     
-    def _build_entity_definitions_section(self) -> str:
-        """Build the entity definitions section of the prompt.
-        
-        Returns:
-            Formatted entity definitions text
-        """
-        definitions = self.ontology.get_entity_definitions()
-        
-        if not definitions:
-            return "No entity types defined."
-        
-        sections = []
-        
-        for definition in definitions:
-            section = self._format_entity_definition(definition)
-            sections.append(section)
-        
-        return "\n\n".join(sections)
-    
-    def _format_entity_definition(self, definition: EntityDefinition) -> str:
-        """Format a single entity definition for the prompt.
-        
-        Args:
-            definition: Entity definition to format
-        
-        Returns:
-            Formatted definition text
-        """
-        lines = [f"## {definition.name or definition.entity_id}"]
-        
-        if definition.description:
-            lines.append(f"**Description:** {definition.description}")
-        
-        # Add relations if defined
-        if definition.relations:
-            lines.append("**Relationships:**")
-            for relation in definition.relations:
-                lines.append(f"- Can have {relation.to_label} relationship with {relation.target_type}")
-        
-        # Add examples if available
-        if definition.examples:
-            lines.append("**Examples:**")
-            for example in definition.examples:
-                if example.title:
-                    lines.append(f"- {example.title}")
-                    if example.description:
-                        lines.append(f"  {example.description}")
-        
-        return "\n".join(lines)
-    
     def build_validation_prompt(self, extracted_data: Dict[str, Any]) -> str:
         """Build a prompt to validate extracted data.
         
@@ -164,6 +114,8 @@ Extract entities and relationships from the provided document according to the e
         Returns:
             Validation prompt string
         """
+        ontology_json = self.ontology.to_llm_prompt_snippet()
+        
         return f"""Please validate the following extracted entities and relationships.
 
 Check for:
@@ -176,7 +128,7 @@ EXTRACTED DATA:
 {extracted_data}
 
 ONTOLOGY DEFINITIONS:
-{self._build_entity_definitions_section()}
+{ontology_json}
 
 Return validation results in JSON format:
 {{
@@ -192,8 +144,7 @@ Return validation results in JSON format:
         Returns:
             List of entity type identifiers
         """
-        definitions = self.ontology.get_entity_definitions()
-        return [defn.entity_id for defn in definitions]
+        return list(self.ontology.entities.keys())
     
     def get_available_relation_types(self) -> List[str]:
         """Get list of available relation types from ontology.
@@ -201,15 +152,7 @@ Return validation results in JSON format:
         Returns:
             List of relation type identifiers
         """
-        relation_types = set()
-        definitions = self.ontology.get_entity_definitions()
-        
-        for definition in definitions:
-            if definition.relations:
-                for relation in definition.relations:
-                    relation_types.add(relation.to_label)
-        
-        return list(relation_types)
+        return list(self.ontology.relations.keys())
     
     def estimate_prompt_tokens(self, document_content: str) -> int:
         """Estimate number of tokens in the complete prompt.

@@ -60,12 +60,17 @@ The backend supports all Hyland Data Curation API options:
         "dashes": True       # Normalize dashes
     },
     "chunking": False,       # Enable/disable text chunking
-    "chunk_size": 1000,      # Chunk size (if chunking enabled)
+    "chunk_size": 1000,      # Chunk size (if chunking enabled) - DESIRED size, may be longer
     "embedding": False,      # Generate embeddings (requires chunking)
     "json_schema": False,    # Return JSON schema ("FULL", "MDAST", "PIPELINE", or False)
     "pii": False            # PII detection/redaction ("detection", "redaction", or False)
 }
 ```
+
+**Important Note on `chunk_size`:** According to Hyland's documentation, `chunk_size` is the *desired* size of each chunk, but **actual chunks may be longer to prevent breaking sentences/paragraphs**. This means:
+- Requesting `chunk_size=800` may produce chunks ranging from 500 to 3000+ characters
+- The API prioritizes semantic coherence over strict size limits
+- For NLP models with token limits (e.g., GLiREL's 512 tokens), some chunks may still be truncated
 
 **Default:** Only normalization enabled, no chunking (we want full document markdown)
 
@@ -83,7 +88,7 @@ HYLAND_KE_OAUTH_URL=https://auth.iam.experience.hyland.com/idp
 
 # Curation options
 HYLAND_KE_ENABLE_CHUNKING=false
-HYLAND_KE_CHUNK_SIZE=1000
+HYLAND_KE_CHUNK_SIZE=800  # Desired size - actual chunks may be longer to preserve sentences
 HYLAND_KE_ENABLE_EMBEDDINGS=false
 ```
 
@@ -283,6 +288,35 @@ Before using Hyland KE in production:
 - `specs/03-html-parsing-and-document-model.md` - Hyland backend spec
 - `specs/seed_architect.ure.md` - Architecture updates
 
+## Known Limitations
+
+### 1. Chunking Behavior
+**Issue:** The `chunk_size` parameter is a *desired* size, not a hard limit. Actual chunks may be significantly longer to preserve sentence/paragraph boundaries.
+
+**Impact:**
+- Requesting `chunk_size=800` can produce chunks of 2000-6000 characters
+- Models with strict token limits (e.g., GLiREL: 512 tokens) will auto-truncate
+- Some content at the end of oversized chunks may be lost during truncation
+
+**Workaround:**
+- Accept that some chunks will be truncated by downstream models
+- Use smaller `chunk_size` values (e.g., 500-800) to minimize oversized chunks
+- For strict size requirements, consider post-processing chunks or using Docling backend
+
+**Reference:** [Hyland API Documentation](https://hyland.github.io/ContentIntelligence-Docs/KnowledgeEnrichment/Reference/DataCurationAPI/Samples/python)
+
+### 2. Presigned URL Expiration
+**Issue:** Presigned URLs for uploading/downloading results have short expiration times (typically 15-30 minutes).
+
+**Impact:**
+- Long-running processing jobs may fail with HTTP 404 errors
+- Credentials need frequent refresh
+
+**Workaround:**
+- Process documents promptly after job creation
+- Implement retry logic with fresh presigned URL requests
+- Monitor job status and download results immediately when complete
+
 ## Status
 
 ✅ **Implementation Complete**
@@ -291,10 +325,11 @@ Before using Hyland KE in production:
 - Async job processing with polling
 - Markdown extraction and storage
 - Error handling comprehensive
+- Chunking support with documented limitations
 
 ⏳ **Pending Testing**
 - Requires real Hyland OAuth credentials
-- End-to-end integration tests
+- End-to-end integration tests with chunking
 - Performance benchmarking vs Docling
 
 📝 **Documentation Complete**

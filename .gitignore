@@ -123,7 +123,7 @@ simple_*.py
 query_results.py
 analyze_results.py
 test_*.py
-!tests/test_*.py
+!tests/**/test_*.py
 
 # Additional virtual environments
 .venv*/

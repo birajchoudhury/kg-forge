@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from kg_forge.entities.models import EntityDefinition
+from .schema import OntologySchema
 
 
 @dataclass
@@ -63,6 +64,14 @@ class OntologyPack(ABC):
     @abstractmethod
     def load_entity_definitions(self) -> List[EntityDefinition]:
         """Load entity type definitions from the ontology pack."""
+        pass
+    
+    @abstractmethod
+    def load_ontology_schema(self) -> OntologySchema:
+        """Load and normalize ontology into OntologySchema.
+        
+        Auto-detects format (TTL or Markdown) and produces normalized schema.
+        """
         pass
     
     @abstractmethod

@@ -23,7 +23,8 @@ class CurationBackend(Protocol):
         self,
         source_path: Path,
         namespace: str,
-        markdown_base_dir: Path
+        markdown_base_dir: Path,
+        chunking_enabled: bool = False
     ) -> CurationResult:
         """
         Curate a document to extract text and metadata.
@@ -32,9 +33,15 @@ class CurationBackend(Protocol):
             source_path: Path to source document (HTML, PDF, DOCX, PPTX, etc.)
             namespace: Namespace for organizing output
             markdown_base_dir: Base directory for markdown output (e.g., output/markdowns)
+            chunking_enabled: Whether to produce document chunks
         
         Returns:
-            CurationResult containing curated text, markdown path, and metadata
+            CurationResult containing:
+                - curated_text: Clean text for extraction
+                - markdown_path: Path to saved markdown file
+                - chunks: List of DocumentChunk (if chunking_enabled=True)
+                - chunks_path: Path to chunks.json file (if chunking_enabled=True)
+                - metadata: Document metadata
         
         Raises:
             CurationError: If curation fails

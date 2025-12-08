@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from kg_forge.curation.base import CurationBackend
 from kg_forge.curation.errors import CurationBackendError, CurationError
-from kg_forge.models.curation import CurationResult, DocumentMetadata
+from kg_forge.models.curation import CurationResult, DocumentChunk, DocumentMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -185,12 +185,13 @@ class HylandKECurationBackend:
     
     # API Request Methods
     
-    def _get_presign_url(self, access_token: str) -> Dict[str, str]:
+    def _get_presign_url(self, access_token: str, curation_options: Dict[str, Any]) -> Dict[str, str]:
         """
         Request presigned URLs for file upload and result download.
         
         Args:
             access_token: Valid OAuth access token
+            curation_options: Curation options including optional chunking config
             
         Returns:
             Dict with job_id, put_url, get_url
@@ -206,7 +207,7 @@ class HylandKECurationBackend:
         }
         
         # Send curation options in presign request
-        request_data = json.dumps(self._curation_options).encode()
+        request_data = json.dumps(curation_options).encode()
         
         try:
             request = Request(url=presign_url, data=request_data, headers=headers, method="POST")
@@ -392,28 +393,31 @@ class HylandKECurationBackend:
         self,
         source_path: Path,
         namespace: str,
-        markdown_base_dir: Path
+        markdown_base_dir: Path,
+        chunking_enabled: bool = False
     ) -> CurationResult:
         """
         Curate document using Hyland KE Data Curation API.
         
         Workflow:
         1. Get OAuth access token
-        2. Request presigned URLs
+        2. Request presigned URLs (with chunking options if enabled)
         3. Upload file to presigned PUT URL
         4. Poll job status until complete
         5. Download results from presigned GET URL
         6. Extract markdown and metadata
-        7. Save markdown to file
-        8. Return CurationResult
+        7. If chunking enabled: Extract and save chunks
+        8. Save markdown to file
+        9. Return CurationResult
         
         Args:
             source_path: Path to source document
             namespace: Namespace for organizing output
             markdown_base_dir: Base directory for markdown output
+            chunking_enabled: Whether to request document chunks from API
         
         Returns:
-            CurationResult with curated text, markdown path, and metadata
+            CurationResult with curated text, markdown path, metadata, and optional chunks
         
         Raises:
             UnsupportedFormatError: If format is not supported
@@ -445,26 +449,38 @@ class HylandKECurationBackend:
             # Step 1: Get access token
             access_token = self._get_access_token()
             
-            # Step 2: Get presigned URLs
-            presign_response = self._get_presign_url(access_token)
+            # Step 2: Prepare curation options with optional chunking
+            curation_options = self._curation_options.copy()
+            if chunking_enabled:
+                # Simple boolean format (as per original API docs)
+                curation_options["chunking"] = True
+                # NOTE: Hyland API chunk_size is a "desired" size - actual chunks may be longer
+                # to prevent breaking sentences/paragraphs. For GLiREL compatibility (512 token limit),
+                # we request smaller chunks, but some may still exceed the limit and get truncated.
+                # Recommended: 800 chars (~200 tokens average), but some chunks may reach 2000+ chars.
+                curation_options["chunk_size"] = 800  # characters (desired, not guaranteed)
+                logger.info("Chunking enabled with chunk_size=800 chars (desired, may be longer to preserve sentences)")
+            
+            # Step 3: Get presigned URLs
+            presign_response = self._get_presign_url(access_token, curation_options)
             job_id = presign_response["job_id"]
             put_url = presign_response["put_url"]
             get_url = presign_response["get_url"]
             
             logger.info(f"Hyland job created: {job_id}")
             
-            # Step 3: Upload file
+            # Step 4: Upload file
             self._upload_file(put_url, source_path)
             
-            # Step 4: Poll for completion
+            # Step 5: Poll for completion
             logger.info(f"Waiting for Hyland job {job_id} to complete...")
             status = self._poll_job_status(job_id, access_token)
             logger.info(f"Hyland job {job_id} completed with status: {status}")
             
-            # Step 5: Download results
+            # Step 6: Download results
             results = self._download_results(get_url)
             
-            # Step 6: Extract markdown and metadata
+            # Step 7: Extract markdown and metadata
             markdown_data = results.get("markdown", {})
             markdown_content = markdown_data.get("output", "")
             
@@ -475,7 +491,7 @@ class HylandKECurationBackend:
             # Extract metadata from results (Hyland doesn't provide as much metadata as Docling)
             metadata = self._extract_metadata(results, source_path, file_ext)
             
-            # Step 7: Save markdown file
+            # Step 8: Save markdown file
             markdown_path = self._save_markdown(
                 markdown_content,
                 doc_id,
@@ -483,7 +499,24 @@ class HylandKECurationBackend:
                 markdown_base_dir
             )
             
-            # Step 8: Create curation result
+            # Step 9: Extract and save chunks if enabled
+            chunks = None
+            chunks_path = None
+            if chunking_enabled:
+                try:
+                    chunks, chunks_path = self._extract_chunks(
+                        results, 
+                        doc_id, 
+                        namespace, 
+                        markdown_base_dir,
+                        markdown_content
+                    )
+                    logger.info(f"Extracted {len(chunks)} chunks from Hyland KE results")
+                except Exception as e:
+                    logger.warning(f"Failed to extract chunks from Hyland KE results: {e}")
+                    warnings.append(f"Chunk extraction failed: {str(e)}")
+            
+            # Step 10: Create curation result
             curation_result = CurationResult(
                 doc_id=doc_id,
                 curated_text=markdown_content,
@@ -491,7 +524,9 @@ class HylandKECurationBackend:
                 metadata=metadata,
                 curation_backend=self.name,
                 curated_at=datetime.now(),
-                warnings=warnings
+                warnings=warnings,
+                chunks=chunks,
+                chunks_path=chunks_path
             )
             
             logger.info(f"Successfully curated document with Hyland KE: {doc_id}")
@@ -587,4 +622,155 @@ class HylandKECurationBackend:
         logger.debug(f"Saved markdown to: {markdown_path}")
 
         return markdown_path
+
+    def _extract_chunks(
+        self,
+        hyland_results: Dict[str, Any],
+        doc_id: str,
+        namespace: str,
+        markdown_base_dir: Path,
+        markdown_content: str
+    ) -> tuple[list[DocumentChunk], Path]:
+        """
+        Extract chunks from Hyland KE API results.
+        
+        Hyland KE API returns chunks when chunking is enabled in curation options.
+        The chunks array is found at results["markdown"]["chunks"].
+        
+        Each chunk contains:
+        - text: Chunk text content
+        - metadata: Dict with page, section, paragraph_index, heading_level, etc.
+        - location: Optional dict with start/end offsets
+        
+        Args:
+            hyland_results: Hyland API response dict
+            doc_id: Document ID with extension
+            namespace: Namespace for organization
+            markdown_base_dir: Base directory for markdown files
+            markdown_content: Full markdown content (for offset calculation)
+        
+        Returns:
+            Tuple of (chunks list, chunks_path)
+        
+        Raises:
+            ValueError: If chunks not found in results or invalid format
+        """
+        markdown_data = hyland_results.get("markdown", {})
+        api_chunks = markdown_data.get("chunks")
+        
+        logger.info(f"Chunk extraction: markdown_data keys={markdown_data.keys() if isinstance(markdown_data, dict) else type(markdown_data)}")
+        logger.info(f"Chunk extraction: api_chunks type={type(api_chunks)}, count={len(api_chunks) if isinstance(api_chunks, list) else 'N/A'}")
+        
+        if not api_chunks:
+            raise ValueError("No chunks found in Hyland KE results - chunking may not be enabled")
+        
+        if not isinstance(api_chunks, list):
+            raise ValueError(f"Expected chunks to be a list, got {type(api_chunks)}")
+        
+        chunks = []
+        current_offset = 0  # Track cumulative offset for string chunks
+        
+        for idx, api_chunk in enumerate(api_chunks):
+            # Handle both string chunks and dict chunks
+            if isinstance(api_chunk, str):
+                chunk_text = api_chunk
+                chunk_metadata = {}
+            elif isinstance(api_chunk, dict):
+                # Extract chunk text
+                chunk_text = api_chunk.get("text", "")
+                chunk_metadata = api_chunk.get("metadata", {})
+            else:
+                logger.warning(f"Skipping chunk at index {idx} - unexpected type {type(api_chunk)}")
+                continue
+            
+            if not chunk_text or not chunk_text.strip():
+                logger.warning(f"Skipping empty chunk at index {idx}")
+                continue
+            
+            # Extract metadata (if dict chunk)
+            page = chunk_metadata.get("page") if chunk_metadata else None
+            section = chunk_metadata.get("section") if chunk_metadata else None
+            heading_level = chunk_metadata.get("heading_level") if chunk_metadata else None
+            paragraph_index = chunk_metadata.get("paragraph_index") if chunk_metadata else None
+            
+            # Extract or calculate offsets (only for dict chunks)
+            start_offset = None
+            end_offset = None
+            
+            if isinstance(api_chunk, dict):
+                location = api_chunk.get("location", {})
+                start_offset = location.get("start")
+                end_offset = location.get("end")
+            
+            # If offsets not provided, try to find text in markdown
+            if start_offset is None and chunk_text in markdown_content:
+                start_offset = markdown_content.find(chunk_text)
+                end_offset = start_offset + len(chunk_text) if start_offset != -1 else None
+            
+            # If still no offsets, use sequential offsets based on chunk order
+            if start_offset is None:
+                start_offset = current_offset
+                end_offset = current_offset + len(chunk_text)
+                current_offset = end_offset
+            
+            # Generate chunk_id: <doc_id>_chunk_<zero-padded-index>
+            # e.g., "platform-overview.pdf_chunk_001"
+            chunk_id = f"{doc_id}_chunk_{idx+1:03d}"
+            
+            # Build metadata dict (preserve all Hyland-specific metadata)
+            metadata_dict = {
+                "source": "hyland_ke",
+                "chunk_index": idx
+            }
+            if heading_level is not None:
+                metadata_dict["heading_level"] = heading_level
+            if paragraph_index is not None:
+                metadata_dict["paragraph_index"] = paragraph_index
+            # Include any extra metadata from Hyland
+            for key, value in chunk_metadata.items():
+                if key not in ["page", "section", "heading_level", "paragraph_index"]:
+                    metadata_dict[key] = value
+            
+            # Create DocumentChunk object
+            chunk = DocumentChunk(
+                chunk_id=chunk_id,
+                doc_id=doc_id,
+                page=page,
+                section=section,
+                start_offset=start_offset,
+                end_offset=end_offset,
+                text=chunk_text,
+                metadata=metadata_dict
+            )
+            chunks.append(chunk)
+        
+        logger.info(f"Extracted {len(chunks)} chunks from Hyland KE results")
+        
+        # Save chunks to JSON file
+        namespace_dir = markdown_base_dir / namespace
+        namespace_dir.mkdir(parents=True, exist_ok=True)
+        chunks_path = namespace_dir / f"{doc_id}.chunks.json"
+        
+        # Serialize chunks to JSON
+        chunks_data = [
+            {
+                "chunk_id": c.chunk_id,
+                "doc_id": c.doc_id,
+                "page": c.page,
+                "section": c.section,
+                "start_offset": c.start_offset,
+                "end_offset": c.end_offset,
+                "text": c.text,
+                "metadata": c.metadata
+            }
+            for c in chunks
+        ]
+        
+        with open(chunks_path, 'w', encoding='utf-8') as f:
+            json.dump(chunks_data, f, indent=2, ensure_ascii=False)
+        
+        logger.debug(f"Saved {len(chunks)} chunks to: {chunks_path}")
+        
+        return chunks, chunks_path
+
 

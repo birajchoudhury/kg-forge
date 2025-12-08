@@ -7,6 +7,41 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class DocumentChunk(BaseModel):
+    """Represents a chunk of a document when chunking is enabled."""
+
+    chunk_id: str = Field(..., description="Unique identifier for this chunk (e.g., 'doc123_chunk_001')")
+    doc_id: str = Field(..., description="Parent document ID")
+    page: Optional[int] = Field(None, description="Page number if available from source document")
+    section: Optional[str] = Field(None, description="Section/heading name if available")
+    start_offset: int = Field(..., description="Character offset in full markdown where chunk starts")
+    end_offset: int = Field(..., description="Character offset in full markdown where chunk ends")
+    text: str = Field(..., description="The actual chunk text content")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, 
+        description="Additional chunk metadata (heading_level, contains_table, etc.)"
+    )
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "chunk_id": "platform/intro.pdf_chunk_001",
+                "doc_id": "platform/intro.pdf",
+                "page": 1,
+                "section": "Introduction",
+                "start_offset": 0,
+                "end_offset": 512,
+                "text": "# Introduction\n\nThis document provides an overview...",
+                "metadata": {
+                    "heading_level": 1,
+                    "contains_table": False,
+                    "paragraph_index": 0
+                }
+            }
+        }
+    )
+
+
 class DocumentMetadata(BaseModel):
     """Metadata extracted from a curated document."""
 
@@ -43,6 +78,14 @@ class CurationResult(BaseModel):
     doc_id: str = Field(..., description="Document ID with extension (e.g., 'intro.html', 'report.pdf')")
     curated_text: str = Field(..., description="Cleaned, curated text content")
     markdown_path: Path = Field(..., description="Path to saved markdown file")
+    chunks: Optional[list[DocumentChunk]] = Field(
+        None, 
+        description="Document chunks when chunking is enabled"
+    )
+    chunks_path: Optional[Path] = Field(
+        None, 
+        description="Path to chunks.json file when chunking is enabled"
+    )
     metadata: DocumentMetadata = Field(..., description="Extracted document metadata")
     curation_backend: str = Field(..., description="Backend used for curation (docling, hyland_ke)")
     curated_at: datetime = Field(default_factory=datetime.now, description="Curation timestamp")
@@ -55,6 +98,18 @@ class CurationResult(BaseModel):
                 "doc_id": "platform/intro.pdf",
                 "curated_text": "# Introduction\n\nThis document provides...",
                 "markdown_path": "output/markdowns/my-namespace/platform/intro.pdf.md",
+                "chunks": [
+                    {
+                        "chunk_id": "platform/intro.pdf_chunk_001",
+                        "doc_id": "platform/intro.pdf",
+                        "page": 1,
+                        "section": "Introduction",
+                        "start_offset": 0,
+                        "end_offset": 512,
+                        "text": "# Introduction\n\nThis document provides..."
+                    }
+                ],
+                "chunks_path": "output/markdowns/my-namespace/platform/intro.pdf.chunks.json",
                 "metadata": {
                     "title": "Platform Introduction",
                     "source_format": "pdf",
@@ -74,7 +129,7 @@ class CurationResult(BaseModel):
         Returns:
             Dict representation with serializable types
         """
-        return {
+        result = {
             "doc_id": self.doc_id,
             "curated_text": self.curated_text,
             "markdown_path": str(self.markdown_path),
@@ -83,3 +138,11 @@ class CurationResult(BaseModel):
             "curated_at": self.curated_at.isoformat(),
             "warnings": self.warnings
         }
+        
+        if self.chunks is not None:
+            result["chunks"] = [chunk.model_dump() for chunk in self.chunks]
+            
+        if self.chunks_path is not None:
+            result["chunks_path"] = str(self.chunks_path)
+            
+        return result

@@ -108,7 +108,7 @@ database = "neo4j"
         self.docs_dir = docs_dir
         self.ontology_dir = ontology_dir
     
-    def run_cli_command(self, cmd_args: list, expect_success: bool = True):
+    def run_cli_command(self, cmd_args: list, expect_success: bool = True, timeout: int = 60):
         """Run KG Forge CLI command and return result."""
         # Use sys.executable to ensure we use the same Python interpreter
         cmd = [sys.executable, "-m", "kg_forge.cli.main"] + cmd_args
@@ -122,7 +122,7 @@ database = "neo4j"
                 text=True,
                 encoding='utf-8',  # Fix Windows encoding issues
                 errors='replace',  # Replace invalid chars instead of failing
-                timeout=30,
+                timeout=timeout,
                 env=os.environ.copy()  # Inherit current environment
             )
             
