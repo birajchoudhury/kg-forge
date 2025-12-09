@@ -50,11 +50,15 @@ class FilesystemOntologyPack(OntologyPack):
         return self._info
     
     def load_entity_definitions(self) -> List[EntityDefinition]:
-        """Load entity definitions from entities/ directory."""
+        """Load entity definitions from entities/ directory.
+        
+        For TTL-based packs without entities/ directory, returns empty list.
+        Entity extraction should use load_ontology_schema() instead.
+        """
         entities_dir = self.pack_path / "entities"
         
         if not entities_dir.exists():
-            logger.warning(f"Entities directory not found in pack: {self.pack_path}")
+            logger.debug(f"No entities/ directory in pack {self.pack_path} (TTL-based pack)")
             return []
         
         loader = EntityDefinitionLoader()

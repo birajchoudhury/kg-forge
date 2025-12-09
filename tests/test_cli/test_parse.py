@@ -16,7 +16,7 @@ def runner():
 @pytest.fixture
 def test_data_dir():
     """Get path to test data directory."""
-    return Path(__file__).parent.parent.parent / "test_data"
+    return Path(__file__).parent.parent.parent / "test_docs"
 
 
 def test_parse_directory(runner, test_data_dir):

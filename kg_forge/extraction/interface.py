@@ -128,18 +128,30 @@ class BaseExtractionBackend:
         """
         return ontology.validate_relation(relation_type, src_entity_type, dst_entity_type)
     
-    def extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
+    def extract(self, content: str, ontology: OntologySchema, doc_id: str, namespace: str = None) -> LexicalGraph:
         """Extract entities and relations from content.
         
         Base implementation that sets up common state and delegates to _do_extract.
+        
+        Args:
+            content: Curated text content
+            ontology: Normalized ontology schema
+            doc_id: Document identifier
+            namespace: Optional namespace for organizing output
         """
         self._reset_counters()
-        return self._do_extract(content, ontology, doc_id)
+        return self._do_extract(content, ontology, doc_id, namespace)
     
-    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str) -> LexicalGraph:
+    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str, namespace: str = None) -> LexicalGraph:
         """Perform the actual extraction work.
         
         Must be implemented by concrete backend classes.
+        
+        Args:
+            content: Curated text content
+            ontology: Normalized ontology schema
+            doc_id: Document identifier
+            namespace: Optional namespace for organizing output
         """
         raise NotImplementedError("Subclasses must implement _do_extract")
     

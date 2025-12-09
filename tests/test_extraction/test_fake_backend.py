@@ -17,23 +17,42 @@ def mock_ontology():
     """Create a mock ontology pack for testing."""
     ontology = Mock()
     
-    # Create mock entity definitions with proper structure
-    mock_def1 = Mock()
-    mock_def1.entity_id = "Product"
-    mock_def1.name = "Product"
-    mock_def1.relations = []  # Empty list instead of Mock
+    # Create mock entity types for OntologySchema interface
+    from kg_forge.ontology.schema import EntityType, Property
     
-    mock_def2 = Mock()
-    mock_def2.entity_id = "Technology"
-    mock_def2.name = "Technology"
-    mock_def2.relations = []
+    entity_types = {
+        "Product": EntityType(
+            name="Product",
+            iri="http://example.org/Product",
+            description="A product",
+            kind="core",
+            properties=[
+                Property(name="name", description="Product name", datatype="string", required=True)
+            ]
+        ),
+        "Technology": EntityType(
+            name="Technology",
+            iri="http://example.org/Technology",
+            description="A technology",
+            kind="core",
+            properties=[
+                Property(name="name", description="Tech name", datatype="string", required=True)
+            ]
+        ),
+        "Topic": EntityType(
+            name="Topic",
+            iri="http://example.org/Topic",
+            description="A topic",
+            kind="core",
+            properties=[
+                Property(name="name", description="Topic name", datatype="string", required=True)
+            ]
+        )
+    }
     
-    mock_def3 = Mock()
-    mock_def3.entity_id = "Topic"
-    mock_def3.name = "Topic"
-    mock_def3.relations = []
+    ontology.entities = entity_types
+    ontology.relations = {}
     
-    ontology.get_entity_definitions.return_value = [mock_def1, mock_def2, mock_def3]
     return ontology
 
 

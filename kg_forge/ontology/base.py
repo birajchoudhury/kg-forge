@@ -110,21 +110,32 @@ class OntologyPack(ABC):
             return issues
         
         # Check for required files
-        entities_dir = self.pack_path / "entities"
-        if not entities_dir.exists():
-            issues.append("Missing 'entities' directory")
+        # Pack must have either:
+        # 1. TTL files (.ttl) with pack.yaml, OR
+        # 2. entities/ directory with .md files and pack.yaml
         
         pack_yaml = self.pack_path / "pack.yaml"
-        if not pack_yaml.exists():
+        has_pack_yaml = pack_yaml.exists()
+        
+        ttl_files = list(self.pack_path.glob("*.ttl"))
+        entities_dir = self.pack_path / "entities"
+        has_entities_dir = entities_dir.exists()
+        
+        if not has_pack_yaml:
             issues.append("Missing 'pack.yaml' configuration file")
         
-        # Validate entity definitions
-        try:
-            definitions = self.get_entity_definitions()
-            if not definitions:
-                issues.append("No entity definitions found")
-        except Exception as e:
-            issues.append(f"Failed to load entity definitions: {e}")
+        if not ttl_files and not has_entities_dir:
+            issues.append("Pack must have either .ttl files or entities/ directory with .md files")
+        
+        # Validate entity definitions or ontology schema
+        # TTL-based packs don't need entity definitions
+        if not ttl_files:
+            try:
+                definitions = self.get_entity_definitions()
+                if not definitions:
+                    issues.append("No entity definitions found")
+            except Exception as e:
+                issues.append(f"Failed to load entity definitions: {e}")
         
         return issues
     

@@ -330,8 +330,8 @@ class OntologySchema:
     def to_glirel_config(self) -> Dict[str, RelationConstraints]:
         """Generate GLiREL relation config with type constraints."""
         
-    def to_llm_prompt_snippet(self) -> str:
-        """Generate compact JSON for LLM prompts."""
+    def to_entity_config(self) -> Dict[str, Any]:
+        """Generate entity configuration for schema-driven LLM extraction."""
 ```
 
 #### Ontology Ingestion Backends
@@ -407,7 +407,9 @@ class ExtractionBackend(Protocol):
 Implementations:
 
 - **LLMExtractionBackend**: 
-  - Uses `ontology.to_llm_prompt_snippet()` to generate JSON for prompt
+  - Uses `ontology.to_entity_config()` to generate entity configuration
+  - Schema-driven extraction: generic prompts that adapt to any ontology
+  - Separates core entities (global) from occurrence entities (document-specific)
   - Full LLM-based extraction (entities + properties + relations)
   
 - **SpacyLexicalBackend**: 
@@ -417,7 +419,7 @@ Implementations:
   
 - **HybridExtractionBackend**: 
   - Phase 1: Uses `ontology.to_gliner_config()` for entity detection
-  - Phase 2: Uses `ontology.to_llm_prompt_snippet()` for relation extraction
+  - Phase 2: Uses `ontology.to_entity_config()` for property and relation extraction
   - GLiNER + LLM (ontology-aware entity detection + LLM property/relation extraction)
 
 A separate DedupBackend (Splink/Zingg) receives the LexicalGraph and returns a DedupedLexicalGraph.
@@ -846,7 +848,7 @@ class OntologyPack:
 - Extraction backends call helper methods:
   - `ontology.to_gliner_config()` → GLiNER labels
   - `ontology.to_glirel_config()` → GLiREL relation constraints  
-  - `ontology.to_llm_prompt_snippet()` → Compact JSON for LLM prompts
+  - `ontology.to_entity_config()` → Entity configuration for schema-driven LLM extraction
 
 ---
 
@@ -1545,7 +1547,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
   - **OntologySchema Helpers**:
     - `to_gliner_config()`: Generate entity labels + descriptions for GLiNER
     - `to_glirel_config()`: Generate relation constraints for GLiREL
-    - `to_llm_prompt_snippet()`: Generate compact JSON for LLM prompts
+    - `to_entity_config()`: Generate entity configuration for schema-driven LLM extraction
   - Dynamic loading and activation of ontology packs
   - Validation framework for ontology definitions
   - CLI commands for ontology inspection and management
@@ -1623,15 +1625,17 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
 
 - Implement LLMExtractionBackend:
    - **Receives `OntologySchema` (not raw TTL or markdown)**
-   - Build prompt from:
-       - curated text,
-       - `ontology.to_llm_prompt_snippet()` → compact JSON with entities & relations
-   - Call Bedrock via LlamaIndex client
+   - Uses schema-driven extraction approach:
+       - `ontology.to_entity_config()` → entity configuration with core/occurrence entities
+       - Generic system and user prompts that adapt to any ontology
+       - Automatic validation and normalization of extraction results
+   - Call Bedrock via BedrockClient
    - Parse model output into LexicalGraph:
        - LexicalMentions with entity_type, surface, spans (if provided)
        - LexicalRelations
    - Implement parsing logic that:
-       - validates JSON shape,
+       - validates JSON shape (core_entities and occurrence_entities),
+       - validates entity properties against schema,
        - logs and skips malformed items,
        - gracefully handles partial failures.
    - Generate test data:
@@ -1682,7 +1686,7 @@ Each step will have its own detailed spec (docs/specs/*.md), tests, and code.
       - **Phase 2 (LLM)**:
         - Build specialized prompt:
           - Include detected entities from Phase 1
-          - Include `ontology.to_llm_prompt_snippet()` for relation constraints
+          - Include `ontology.to_entity_config()` for property and relation extraction
         - Call LLM to extract properties and relationships
         - Merge GLiNER entities with LLM-extracted relations
    - Graceful fallback:

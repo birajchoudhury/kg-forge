@@ -21,7 +21,7 @@ except ImportError:
     OWL = None
     URIRef = None
 
-from .schema import OntologySchema, EntityType, RelationType, Property
+from .schema import OntologySchema, EntityType, RelationType, Property, Dependency
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +134,22 @@ class TTLOntologyLoader:
         # Extract properties (data properties)
         properties = self._extract_properties_for_class(class_uri)
         
+        # Determine entity kind (core vs occurrence)
+        kind = self._determine_entity_kind(class_uri)
+        
+        # Extract dependencies (for occurrence entities)
+        dependencies = []
+        if kind == "occurrence":
+            dependencies = self._extract_dependencies(class_uri)
+        
         return EntityType(
             name=label,
             iri=str(class_uri),
             description=description,
+            kind=kind,
             properties=properties,
-            examples=[]  # TTL files don't typically include examples
+            examples=[],  # TTL files don't typically include examples
+            depends_on=dependencies
         )
     
     def _extract_relations(self) -> Dict[str, RelationType]:
@@ -306,3 +316,154 @@ class TTLOntologyLoader:
                 metadata["title"] = label
         
         return metadata
+    
+    def _determine_entity_kind(self, class_uri: URIRef) -> str:
+        """Determine if entity is 'core' or 'occurrence'.
+        
+        Args:
+            class_uri: URI of the class
+            
+        Returns:
+            "core" or "occurrence"
+        """
+        # Define custom namespace for entity kind annotation
+        EX = Namespace("http://example.org/ontology#")
+        
+        # Check for explicit annotation
+        for kind_value in self.graph.objects(class_uri, EX.entityKind):
+            kind = str(kind_value).lower()
+            if kind in ["core", "occurrence"]:
+                return kind
+        
+        # Check inheritance from CoreEntity or OccurrenceEntity
+        for parent in self.graph.objects(class_uri, RDFS.subClassOf):
+            if isinstance(parent, URIRef):
+                parent_label = self._get_label(parent)
+                if parent_label == "CoreEntity":
+                    return "core"
+                elif parent_label == "OccurrenceEntity":
+                    return "occurrence"
+        
+        # Default to core
+        return "core"
+    
+    def _extract_dependencies(self, class_uri: URIRef) -> List[Dependency]:
+        """Extract dependencies from OWL restrictions.
+        
+        Args:
+            class_uri: URI of the class
+            
+        Returns:
+            List of Dependency objects
+        """
+        dependencies = []
+        
+        # Find all restrictions in the subClassOf chain
+        for parent in self.graph.objects(class_uri, RDFS.subClassOf):
+            # Check if this is a restriction (has owl:onProperty)
+            on_property = list(self.graph.objects(parent, OWL.onProperty))
+            if on_property:
+                # This is a restriction
+                prop_uri = on_property[0]
+                
+                # Get the target class (owl:onClass)
+                on_class_list = list(self.graph.objects(parent, OWL.onClass))
+                if on_class_list:
+                    target_class_uri = on_class_list[0]
+                    
+                    # Determine cardinality
+                    cardinality = self._determine_cardinality(parent)
+                    
+                    # Extract role name from property
+                    prop_label = self._get_label(prop_uri)
+                    if prop_label:
+                        role = self._extract_role_name(prop_label)
+                        
+                        # Get target class name
+                        target_name = self._get_label(target_class_uri)
+                        if target_name:
+                            dependencies.append(Dependency(
+                                role=role,
+                                entity=target_name,
+                                cardinality=cardinality
+                            ))
+        
+        return dependencies
+    
+    def _determine_cardinality(self, restriction: URIRef) -> str:
+        """Determine cardinality from OWL restriction.
+        
+        Args:
+            restriction: Restriction node
+            
+        Returns:
+            Cardinality string: "1", "0..1", "1..*", "0..*"
+        """
+        # Check for qualifiedCardinality (exact)
+        for card in self.graph.objects(restriction, OWL.qualifiedCardinality):
+            n = int(card)
+            return str(n)
+        
+        # Check for min and max cardinality
+        min_card = None
+        max_card = None
+        
+        for card in self.graph.objects(restriction, OWL.minQualifiedCardinality):
+            min_card = int(card)
+        
+        for card in self.graph.objects(restriction, OWL.maxQualifiedCardinality):
+            max_card = int(card)
+        
+        # Determine cardinality pattern
+        if min_card is not None and max_card is not None:
+            if min_card == 0 and max_card == 1:
+                return "0..1"
+            elif min_card == 1 and max_card == 1:
+                return "1"
+            elif min_card == 0:
+                return "0..*"
+            elif min_card == 1:
+                return "1..*"
+        elif min_card is not None:
+            if min_card == 0:
+                return "0..*"
+            elif min_card == 1:
+                return "1..*"
+            else:
+                return f"{min_card}..*"
+        elif max_card is not None:
+            if max_card == 1:
+                return "0..1"
+            else:
+                return f"0..{max_card}"
+        
+        return "0..*"
+    
+    def _extract_role_name(self, property_label: str) -> str:
+        """Extract role name from property label.
+        
+        Converts labels like 'of Contract', 'has Template' to 'contract', 'template'.
+        
+        Args:
+            property_label: Property label
+            
+        Returns:
+            Snake-cased role name
+        """
+        import re
+        
+        # Remove common prefixes
+        name = property_label
+        for prefix in ['of ', 'has ', 'for ', 'with ', 'from ', 'to ', 'in ', 'on ', 'at ']:
+            if name.lower().startswith(prefix):
+                name = name[len(prefix):]
+                break
+        
+        # Convert to lowercase and replace spaces with underscores
+        name = name.lower().replace(' ', '_')
+        
+        # Convert camelCase to snake_case
+        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
+        
+        return name

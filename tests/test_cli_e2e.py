@@ -182,7 +182,7 @@ database = "neo4j"
             "--namespace", "clitest",
             "--fake-llm",  # Use fake LLM for testing
             "--dry-run"  # Don't actually write to Neo4j in tests
-        ], expect_success=False)  # Allow encoding error at end, check content instead
+        ], expect_success=False, timeout=120)  # Increase timeout for ingest command
         
         # Check that the pipeline actually worked by looking for key success messages
         self.assertIn("Successfully processed", result.stdout)

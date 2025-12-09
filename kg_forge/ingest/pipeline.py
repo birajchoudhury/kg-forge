@@ -159,7 +159,8 @@ class IngestPipeline:
                 'fake_mode': fake_llm,
                 'region': self.config.aws.default_region,
                 'max_tokens': self.config.aws.bedrock_max_tokens,
-                'temperature': self.config.aws.bedrock_temperature
+                'temperature': self.config.aws.bedrock_temperature,
+                'save_debug': True  # Always save debug files for schema-driven extraction
             }
         elif self.extractor == "spacy":
             extraction_config = {
@@ -500,7 +501,8 @@ class IngestPipeline:
                     chunk_graph = self.extraction_backend.extract(
                         content=chunk.text,
                         ontology=self.active_ontology,
-                        doc_id=chunk.chunk_id  # Use chunk_id for unique mention IDs
+                        doc_id=chunk.chunk_id,  # Use chunk_id for unique mention IDs
+                        namespace=self.namespace
                     )
                     
                     # Add chunk metadata to all mentions
@@ -531,7 +533,8 @@ class IngestPipeline:
                 lexical_graph = self.extraction_backend.extract(
                     content=curation_result.curated_text,
                     ontology=self.active_ontology,
-                    doc_id=doc_id
+                    doc_id=doc_id,
+                    namespace=self.namespace
                 )
                 
                 logger.debug(f"Extracted {len(lexical_graph.mentions)} mentions, {len(lexical_graph.relations)} relations")

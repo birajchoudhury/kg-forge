@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from kg_forge.models.lexical import LexicalGraph, LexicalMention, LexicalRelation
-from kg_forge.ontology.base import OntologyPack
+from kg_forge.ontology.schema import OntologySchema
 from kg_forge.extraction.interface import BaseExtractionBackend
 from kg_forge.extraction.exceptions import ExtractionError, ValidationError
 
@@ -56,8 +56,15 @@ class FakeExtractionBackend(BaseExtractionBackend):
                 # Skip invalid test data files
                 pass
     
-    def _do_extract(self, content: str, ontology: OntologyPack, doc_id: str) -> LexicalGraph:
-        """Perform fake extraction."""
+    def _do_extract(self, content: str, ontology: OntologySchema, doc_id: str, namespace: str = None) -> LexicalGraph:
+        """Perform fake extraction.
+        
+        Args:
+            content: Document content
+            ontology: Ontology schema
+            doc_id: Document identifier
+            namespace: Optional namespace (not used in fake backend)
+        """
         if self.failure_mode:
             raise ExtractionError("Fake backend configured to fail")
         
@@ -140,16 +147,15 @@ class FakeExtractionBackend(BaseExtractionBackend):
             }
         )
     
-    def _generate_deterministic_data(self, content: str, ontology: OntologyPack, 
+    def _generate_deterministic_data(self, content: str, ontology: OntologySchema, 
                                    doc_id: str) -> LexicalGraph:
         """Generate deterministic fake data based on content hash."""
         # Use content hash to make results reproducible
         content_hash = hashlib.md5(content.encode('utf-8')).hexdigest()
         hash_int = int(content_hash[:8], 16)
         
-        # Get available entity types from ontology
-        entity_definitions = ontology.get_entity_definitions()
-        entity_types = [defn.id for defn in entity_definitions]
+        # Get available entity types from ontology schema
+        entity_types = list(ontology.entities.keys()) if ontology and ontology.entities else []
         if not entity_types:
             entity_types = ["Topic"]  # Fallback
         
@@ -205,13 +211,12 @@ class FakeExtractionBackend(BaseExtractionBackend):
                 src_entity_type = mentions[src_idx].entity_type
                 dst_entity_type = mentions[dst_idx].entity_type
                 
-                # Find valid relation from ontology
+                # Find valid relation from ontology schema
                 relation_type = "RELATED_TO"  # Default fallback
-                src_defn = next((d for d in entity_definitions if d.id == src_entity_type), None)
-                if src_defn and src_defn.relations:
-                    for rel in src_defn.relations:
-                        if rel.target_type == dst_entity_type:
-                            relation_type = rel.to_label
+                if ontology and ontology.relations:
+                    for rel_name, rel_info in ontology.relations.items():
+                        if src_entity_type in rel_info.head_types and dst_entity_type in rel_info.tail_types:
+                            relation_type = rel_name
                             break
                 
                 relation = LexicalRelation(

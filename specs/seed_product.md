@@ -350,14 +350,14 @@ The system is responsible for:
   - OntologySchema provides helper methods to generate backend-specific configs:
     - `to_gliner_config()`: Entity labels + descriptions for zero-shot NER
     - `to_glirel_config()`: Relation constraints for relation extraction
-    - `to_llm_prompt_snippet()`: Compact JSON for LLM prompts
+    - `to_entity_config()`: Entity configuration for schema-driven LLM extraction
   - **Raw ontology files never passed to extraction backends** - only normalized OntologySchema.
 
 - The ontology is used to:
-  - drive LLM extraction (via `ontology.to_llm_prompt_snippet()` helper),
+  - drive LLM extraction (via `ontology.to_entity_config()` helper for schema-driven prompts),
   - provide label sets and relation schema for the spaCy+GLiNER+GLiREL pipeline (via `to_gliner_config()` and `to_glirel_config()` helpers),
   - provide entity types for GLiNER detection in the hybrid pipeline (via `to_gliner_config()` helper),
-  - drive LLM enrichment in the hybrid pipeline (via `to_llm_prompt_snippet()` helper),
+  - drive LLM enrichment in the hybrid pipeline (via `to_entity_config()` helper for property/relation extraction),
   - shape the resulting knowledge graph (entity_type and relationship direction).
 
 ### 5.4 Namespace / Experiment

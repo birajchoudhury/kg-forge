@@ -18,7 +18,7 @@ def loader():
 @pytest.fixture
 def test_data_dir():
     """Get test data directory path."""
-    return Path(__file__).parent.parent.parent / "test_data"
+    return Path(__file__).parent.parent.parent / "test_docs"
 
 
 def test_loader_initialization():

@@ -318,17 +318,20 @@ Focus on technical entities, teams, products, and their relationships.
         self.assertEqual(len(documents), 2, "Should load 2 test documents")
         self.assertIn("Python", documents[0].text, "Should extract Python mentions")
         self.assertIn("Data Engineering Team", documents[0].text, "Should extract team mentions")
-        print(f"✓ Loaded {len(documents)} documents successfully")
+        print(f"[OK] Loaded {len(documents)} documents successfully")
         
         # Step 2: Entity Extraction using Fake Backend  
         print("Step 2: Entity Extraction with Fake Backend")
         extractor = FakeExtractionBackend()
         
+        # Load ontology schema from pack
+        ontology_schema = self.ontology.load_ontology_schema()
+        
         all_mentions = []
         all_relations = []
         
         for doc in documents:
-            lexical_graph = extractor.extract(doc.text, self.ontology, doc_id=doc.doc_id)
+            lexical_graph = extractor.extract(doc.text, ontology_schema, doc_id=doc.doc_id)
             
             self.assertGreater(len(lexical_graph.mentions), 0, "Should extract mentions")
             self.assertGreater(len(lexical_graph.relations), 0, "Should extract relations")
@@ -336,7 +339,7 @@ Focus on technical entities, teams, products, and their relationships.
             all_mentions.extend(lexical_graph.mentions)
             all_relations.extend(lexical_graph.relations)
         
-        print(f"✓ Extracted {len(all_mentions)} entities and {len(all_relations)} relationships")
+        print(f"[OK] Extracted {len(all_mentions)} entities and {len(all_relations)} relationships")
         
         # Verify entity types are extracted
         entity_types = set(m.entity_type for m in all_mentions)
@@ -353,7 +356,7 @@ Focus on technical entities, teams, products, and their relationships.
             metadata={"extraction_method": "fake_backend", "document_count": len(documents)}
         )
         
-        print(f"✓ Combined graph: {len(combined_graph.mentions)} mentions, {len(combined_graph.relations)} relations")
+        print(f"[OK] Combined graph: {len(combined_graph.mentions)} mentions, {len(combined_graph.relations)} relations")
         
         # Step 4: Deduplication
         print("Step 4: Entity Deduplication")
@@ -362,7 +365,7 @@ Focus on technical entities, teams, products, and their relationships.
         
         self.assertEqual(len(deduplicated_graph.canonical_entities), len(all_mentions), "No-dedup should keep all entities")
         self.assertEqual(deduplicated_graph.metadata["dedup_backend"], "none")
-        print(f"✓ Deduplicated to {len(deduplicated_graph.canonical_entities)} canonical entities")
+        print(f"[OK] Deduplicated to {len(deduplicated_graph.canonical_entities)} canonical entities")
         
         # Step 5: Entity Linking (Mocked Neo4j)
         print("Step 5: Entity Linking to Knowledge Graph") 
@@ -387,7 +390,7 @@ Focus on technical entities, teams, products, and their relationships.
             link_results = linker.link_entities(deduplicated_graph.canonical_entities, "e2e_test")
             
             self.assertEqual(len(link_results), len(deduplicated_graph.canonical_entities))
-            print(f"✓ Linked {len(link_results)} entities to knowledge graph")
+            print(f"[OK] Linked {len(link_results)} entities to knowledge graph")
         
         # Step 6: Knowledge Graph Retrieval (Mocked)
         print("Step 6: Knowledge Graph Data Retrieval")
@@ -417,7 +420,7 @@ Focus on technical entities, teams, products, and their relationships.
             self.assertIn("nodes", graph_result)
             self.assertIn("relationships", graph_result) 
             self.assertGreater(len(graph_result["nodes"]), 0)
-            print(f"✓ Retrieved {len(graph_result['nodes'])} nodes and {len(graph_result['relationships'])} relationships from KG")
+            print(f"[OK] Retrieved {len(graph_result['nodes'])} nodes and {len(graph_result['relationships'])} relationships from KG")
         
         print("\n=== Complete Fake Extraction Pipeline Test: SUCCESS ===")
     
@@ -433,21 +436,24 @@ Focus on technical entities, teams, products, and their relationships.
         parser = ConfluenceHTMLParser()
         loader = DocumentLoader(parser)
         documents = loader.load_from_directory(self.docs_dir)
-        print(f"✓ Loaded {len(documents)} documents successfully")
+        print(f"[OK] Loaded {len(documents)} documents successfully")
         
         # Step 2: LLM-style Entity Extraction (using fake backend as demonstration)
         print("Step 2: LLM-style Entity Extraction (simulated)")
         extractor = FakeExtractionBackend()
         
+        # Load ontology schema from pack
+        ontology_schema = self.ontology.load_ontology_schema()
+        
         all_mentions = []
         all_relations = []
         
         for doc in documents:
-            lexical_graph = extractor.extract(doc.text, self.ontology, doc_id=doc.doc_id)
+            lexical_graph = extractor.extract(doc.text, ontology_schema, doc_id=doc.doc_id)
             all_mentions.extend(lexical_graph.mentions)
             all_relations.extend(lexical_graph.relations)
         
-        print(f"✓ LLM-style extracted {len(all_mentions)} entities and {len(all_relations)} relationships")
+        print(f"[OK] LLM-style extracted {len(all_mentions)} entities and {len(all_relations)} relationships")
         
         # Step 3: Verify extraction worked
         self.assertGreater(len(all_mentions), 0, "Should extract entities")
@@ -465,7 +471,7 @@ Focus on technical entities, teams, products, and their relationships.
         ensemble_backend = EnsembleDedupBackend()
         deduplicated_graph = ensemble_backend.deduplicate(combined_graph, "llm_e2e_test")
         
-        print(f"✓ Advanced deduplication: {len(deduplicated_graph.canonical_entities)} canonical entities")
+        print(f"[OK] Advanced deduplication: {len(deduplicated_graph.canonical_entities)} canonical entities")
         
         print("\n=== Complete LLM Extraction Pipeline Test: SUCCESS ===")
     
@@ -543,6 +549,11 @@ Programming language.
     
     def test_spacy_extraction_pipeline(self):
         """Test pipeline with Spacy backend (mocked to avoid model dependencies)."""
+        # Skip on Python 3.9 due to glirel compatibility issues
+        import sys
+        if sys.version_info < (3, 10):
+            self.skipTest("Skipping spacy test on Python 3.9 due to glirel type annotation compatibility")
+        
         # Skip if numpy/thinc compatibility issue exists
         try:
             import spacy
@@ -582,7 +593,7 @@ Programming language.
             
             self.assertGreater(len(result.mentions), 0)
             self.assertEqual(result.metadata["backend"], "spacy")
-            print(f"✓ Spacy backend extracted {len(result.mentions)} entities")
+            print(f"[OK] Spacy backend extracted {len(result.mentions)} entities")
             
             print("\n=== Spacy Extraction Pipeline Test: SUCCESS ===")
 
@@ -620,7 +631,7 @@ class TestDeduplicationBackendComparison(unittest.TestCase):
         # No dedup = same number of canonical entities as mentions
         self.assertEqual(len(result.canonical_entities), len(self.test_mentions))
         self.assertEqual(result.metadata["dedup_backend"], "none")
-        print(f"✓ No-dedup preserved all {len(result.canonical_entities)} entities")
+        print(f"[OK] No-dedup preserved all {len(result.canonical_entities)} entities")
     
     @patch('kg_forge.dedup.splink_backend.SpLinkDedupBackend')
     def test_splink_dedup_backend(self, mock_splink):
@@ -658,7 +669,7 @@ class TestDeduplicationBackendComparison(unittest.TestCase):
         self.assertEqual(result.metadata["dedup_backend"], "splink")
         python_entity = next(e for e in result.canonical_entities if e.entity_type == "Technology")
         self.assertEqual(len(python_entity.mention_ids), 3)
-        print(f"✓ Splink clustered to {len(result.canonical_entities)} canonical entities")
+        print(f"[OK] Splink clustered to {len(result.canonical_entities)} canonical entities")
     
     @patch('kg_forge.dedup.zingg_backend.ZinggDedupBackend')  
     def test_zingg_dedup_backend(self, mock_zingg):
@@ -693,7 +704,7 @@ class TestDeduplicationBackendComparison(unittest.TestCase):
         
         self.assertEqual(len(result.canonical_entities), 2)
         self.assertEqual(result.metadata["dedup_backend"], "zingg")
-        print(f"✓ Zingg clustered to {len(result.canonical_entities)} canonical entities")
+        print(f"[OK] Zingg clustered to {len(result.canonical_entities)} canonical entities")
 
 
     def test_end_to_end_ingestion_with_zingg_backend(self):
@@ -782,7 +793,7 @@ class TestDeduplicationBackendComparison(unittest.TestCase):
                 self.assertIn("Machine Learning Team", team_entity.aliases)
                 self.assertIn("ML team", team_entity.aliases)
                 
-                print(f"✓ Zingg deduplication test: {len(lexical_graph.mentions)} mentions → {len(dedup_result.canonical_entities)} canonical entities")
+                print(f"[OK] Zingg deduplication test: {len(lexical_graph.mentions)} mentions → {len(dedup_result.canonical_entities)} canonical entities")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,498 @@
+@prefix ex:   <https://example.org/contracts#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+#################################################################
+# Ontology header
+#################################################################
+
+ex: a owl:Ontology ;
+  rdfs:label "Contracts & Occurrence Ontology" ;
+  rdfs:comment "Ontology for contract analysis with core entities (contract, organization, person, clause template) and occurrence entities (clause occurrences, events, price adjustments)." .
+
+#################################################################
+# Annotation properties
+#################################################################
+
+ex:entityKind a owl:AnnotationProperty ;
+  rdfs:label "entity kind" ;
+  rdfs:comment "Marks a class as 'core' or 'occurrence' for KG Forge extraction/config." .
+
+#################################################################
+# Meta-classes
+#################################################################
+
+ex:CoreEntity a owl:Class ;
+  rdfs:label "Core Entity" ;
+  rdfs:comment "Entity that has its own identity and can exist independently." .
+
+ex:OccurrenceEntity a owl:Class ;
+  rdfs:label "Occurrence Entity" ;
+  rdfs:comment "Entity that represents an occurrence/event dependent on one or more core entities." .
+
+#################################################################
+# Core entity classes
+#################################################################
+
+ex:Contract a owl:Class ;
+  rdfs:subClassOf ex:CoreEntity ;
+  rdfs:label "Contract" ;
+  rdfs:comment "A legal contract between parties." ;
+  ex:entityKind "core" .
+
+ex:Organization a owl:Class ;
+  rdfs:subClassOf ex:CoreEntity ;
+  rdfs:label "Organization" ;
+  rdfs:comment "A legal entity such as customer, trust, or vendor." ;
+  ex:entityKind "core" .
+
+ex:Person a owl:Class ;
+  rdfs:subClassOf ex:CoreEntity ;
+  rdfs:label "Person" ;
+  rdfs:comment "A natural person (signatory, contact, etc.)." ;
+  ex:entityKind "core" .
+
+ex:ClauseTemplate a owl:Class ;
+  rdfs:subClassOf ex:CoreEntity ;
+  rdfs:label "Clause Template" ;
+  rdfs:comment "Canonical template for a clause type (e.g., standard termination clause)." ;
+  ex:entityKind "core" .
+
+#################################################################
+# Occurrence entity classes
+#################################################################
+
+ex:ClauseOccurrence a owl:Class ;
+  rdfs:subClassOf
+    ex:OccurrenceEntity ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:ofContract ;
+      owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:Contract
+    ] ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:ofTemplate ;
+      owl:maxQualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:ClauseTemplate
+    ] ;
+  rdfs:label "Clause Occurrence" ;
+  rdfs:comment "A specific occurrence of a clause within a particular contract." ;
+  ex:entityKind "occurrence" .
+
+ex:SignatureEvent a owl:Class ;
+  rdfs:subClassOf
+    ex:OccurrenceEntity ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:forContract ;
+      owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:Contract
+    ] ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:hasSigner ;
+      owl:minQualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:Person
+    ] ;
+  rdfs:label "Signature Event" ;
+  rdfs:comment "A particular signing event for a contract by one or more persons." ;
+  ex:entityKind "occurrence" .
+
+ex:RenewalEvent a owl:Class ;
+  rdfs:subClassOf
+    ex:OccurrenceEntity ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:renewsContract ;
+      owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:Contract
+    ] ;
+  rdfs:label "Renewal Event" ;
+  rdfs:comment "A specific renewal point or renewal decision for a contract." ;
+  ex:entityKind "occurrence" .
+
+ex:PriceIncreaseOccurrence a owl:Class ;
+  rdfs:subClassOf
+    ex:OccurrenceEntity ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:priceIncreaseForContract ;
+      owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:Contract
+    ] ,
+    [ a owl:Restriction ;
+      owl:onProperty ex:basedOnClause ;
+      owl:qualifiedCardinality "1"^^xsd:nonNegativeInteger ;
+      owl:onClass ex:ClauseOccurrence
+    ] ;
+  rdfs:label "Price Increase Occurrence" ;
+  rdfs:comment "An occurrence of a price increase under a contract, grounded in a specific clause occurrence." ;
+  ex:entityKind "occurrence" .
+
+#################################################################
+# Object properties – structure & relationships
+#################################################################
+
+# Contract ↔ Organization (parties)
+
+ex:hasParty a owl:ObjectProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:Organization ;
+  rdfs:label "has party" ;
+  rdfs:comment "Relates a contract to an organization that is a party to it." .
+
+ex:isPartyTo a owl:ObjectProperty ;
+  owl:inverseOf ex:hasParty ;
+  rdfs:domain ex:Organization ;
+  rdfs:range ex:Contract ;
+  rdfs:label "is party to" .
+
+ex:hasCustomer a owl:ObjectProperty ;
+  rdfs:subPropertyOf ex:hasParty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:Organization ;
+  rdfs:label "has customer" ;
+  rdfs:comment "Relates a contract to its customer organization or trust." .
+
+ex:hasVendor a owl:ObjectProperty ;
+  rdfs:subPropertyOf ex:hasParty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:Organization ;
+  rdfs:label "has vendor" ;
+  rdfs:comment "Relates a contract to its vendor or service provider organization." .
+
+# Person ↔ Organization (representation)
+
+ex:representsOrganization a owl:ObjectProperty ;
+  rdfs:domain ex:Person ;
+  rdfs:range ex:Organization ;
+  rdfs:label "represents organization" ;
+  rdfs:comment "Organization on whose behalf this person signs or acts." .
+
+ex:hasRepresentative a owl:ObjectProperty ;
+  owl:inverseOf ex:representsOrganization ;
+  rdfs:domain ex:Organization ;
+  rdfs:range ex:Person ;
+  rdfs:label "has representative" .
+
+# Contract ↔ ClauseOccurrence / ClauseTemplate
+
+ex:ofContract a owl:ObjectProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range ex:Contract ;
+  rdfs:label "of contract" ;
+  rdfs:comment "Contract in which this clause occurrence appears." .
+
+ex:hasClauseOccurrence a owl:ObjectProperty ;
+  owl:inverseOf ex:ofContract ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:ClauseOccurrence ;
+  rdfs:label "has clause occurrence" .
+
+ex:ofTemplate a owl:ObjectProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range ex:ClauseTemplate ;
+  rdfs:label "of template" ;
+  rdfs:comment "Clause template that this occurrence instantiates or deviates from." .
+
+ex:hasOccurrence a owl:ObjectProperty ;
+  owl:inverseOf ex:ofTemplate ;
+  rdfs:domain ex:ClauseTemplate ;
+  rdfs:range ex:ClauseOccurrence ;
+  rdfs:label "has occurrence" .
+
+# Contract ↔ SignatureEvent / Person
+
+ex:forContract a owl:ObjectProperty ;
+  rdfs:domain ex:SignatureEvent ;
+  rdfs:range ex:Contract ;
+  rdfs:label "for contract" ;
+  rdfs:comment "Contract that this signature event belongs to." .
+
+ex:hasSignatureEvent a owl:ObjectProperty ;
+  owl:inverseOf ex:forContract ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:SignatureEvent ;
+  rdfs:label "has signature event" .
+
+ex:hasSigner a owl:ObjectProperty ;
+  rdfs:domain ex:SignatureEvent ;
+  rdfs:range ex:Person ;
+  rdfs:label "has signer" ;
+  rdfs:comment "Person who signed in this signature event." .
+
+ex:signs a owl:ObjectProperty ;
+  owl:inverseOf ex:hasSigner ;
+  rdfs:domain ex:Person ;
+  rdfs:range ex:SignatureEvent ;
+  rdfs:label "signs" .
+
+# Contract ↔ RenewalEvent
+
+ex:renewsContract a owl:ObjectProperty ;
+  rdfs:domain ex:RenewalEvent ;
+  rdfs:range ex:Contract ;
+  rdfs:label "renews contract" ;
+  rdfs:comment "Contract renewed in this event." .
+
+ex:hasRenewalEvent a owl:ObjectProperty ;
+  owl:inverseOf ex:renewsContract ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:RenewalEvent ;
+  rdfs:label "has renewal event" .
+
+# Contract / ClauseOccurrence ↔ PriceIncreaseOccurrence
+
+ex:priceIncreaseForContract a owl:ObjectProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range ex:Contract ;
+  rdfs:label "price increase for contract" .
+
+ex:hasPriceIncreaseOccurrence a owl:ObjectProperty ;
+  owl:inverseOf ex:priceIncreaseForContract ;
+  rdfs:domain ex:Contract ;
+  rdfs:range ex:PriceIncreaseOccurrence ;
+  rdfs:label "has price increase occurrence" .
+
+ex:basedOnClause a owl:ObjectProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range ex:ClauseOccurrence ;
+  rdfs:label "based on clause" ;
+  rdfs:comment "Clause occurrence that governs this price increase occurrence." .
+
+#################################################################
+# Data properties – Contract-level business fields
+#################################################################
+
+ex:contractId a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:string ;
+  rdfs:label "contract id" .
+
+ex:contractTitle a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:string ;
+  rdfs:label "contract title" .
+
+ex:planType a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:string ;
+  rdfs:label "plan type" ;
+  rdfs:comment "High-level plan category (e.g. Defined Contribution Pension, Defined Benefit Pension, Health & Welfare, Vacation, Training)." .
+
+ex:effectiveDate a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:date ;
+  rdfs:label "effective date" .
+
+ex:initialTermYears a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:decimal ;
+  rdfs:label "initial term (years)" ;
+  rdfs:comment "Length of the initial contract term in years (e.g. 3.0)." .
+
+ex:initialTermEnd a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:date ;
+  rdfs:label "initial term end" ;
+  rdfs:comment "End date of the initial term, if explicitly stated." .
+
+ex:autoRenewal a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:boolean ;
+  rdfs:label "auto renewal" ;
+  rdfs:comment "True if the contract automatically renews after the initial term." .
+
+ex:renewalTermYears a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:decimal ;
+  rdfs:label "renewal term (years)" ;
+  rdfs:comment "Length of each renewal term in years (e.g. 1.0 for year-to-year renewal)." .
+
+ex:noticeDaysBoard a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:integer ;
+  rdfs:label "notice period – board (days)" ;
+  rdfs:comment "Minimum days of notice the Board/Trust must give to terminate without cause." .
+
+ex:noticeDaysPlanManager a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:integer ;
+  rdfs:label "notice period – plan manager (days)" ;
+  rdfs:comment "Minimum days of notice the Plan Manager (e.g. BeneSys) must give to terminate without cause." .
+
+ex:totalContractValue a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:decimal ;
+  rdfs:label "total contract value" .
+
+ex:currencyCode a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:string ;
+  rdfs:label "currency code" ;
+  rdfs:comment "ISO currency code for monetary amounts, e.g. USD." .
+
+ex:governingLaw a owl:DatatypeProperty ;
+  rdfs:domain ex:Contract ;
+  rdfs:range xsd:string ;
+  rdfs:label "governing law" ;
+  rdfs:comment "State or jurisdiction whose law governs the contract." .
+
+#################################################################
+# Data properties – Organization
+#################################################################
+
+ex:orgName a owl:DatatypeProperty ;
+  rdfs:domain ex:Organization ;
+  rdfs:range xsd:string ;
+  rdfs:label "organization name" .
+
+ex:orgRole a owl:DatatypeProperty ;
+  rdfs:domain ex:Organization ;
+  rdfs:range xsd:string ;
+  rdfs:label "organization role" ;
+  rdfs:comment "Role relative to the contract (e.g. Board, Trust, PlanManager, Vendor, NetworkPartner)." .
+
+ex:orgType a owl:DatatypeProperty ;
+  rdfs:domain ex:Organization ;
+  rdfs:range xsd:string ;
+  rdfs:label "organization type" ;
+  rdfs:comment "Type/category of organization (e.g. multiemployer benefit trust, third_party_administrator)." .
+
+#################################################################
+# Data properties – Person
+#################################################################
+
+ex:fullName a owl:DatatypeProperty ;
+  rdfs:domain ex:Person ;
+  rdfs:range xsd:string ;
+  rdfs:label "full name" .
+
+ex:title a owl:DatatypeProperty ;
+  rdfs:domain ex:Person ;
+  rdfs:range xsd:string ;
+  rdfs:label "title" ;
+  rdfs:comment "Job title or role, e.g., Trustee, President, VP." .
+
+#################################################################
+# Data properties – ClauseTemplate
+#################################################################
+
+ex:templateId a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseTemplate ;
+  rdfs:range xsd:string ;
+  rdfs:label "template id" .
+
+ex:templateClauseType a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseTemplate ;
+  rdfs:range xsd:string ;
+  rdfs:label "template clause type" ;
+  rdfs:comment "High-level clause type for the template, e.g. term_termination, compensation, force_majeure." .
+
+ex:templateHeading a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseTemplate ;
+  rdfs:range xsd:string ;
+  rdfs:label "template heading" .
+
+ex:templateText a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseTemplate ;
+  rdfs:range xsd:string ;
+  rdfs:label "template text" .
+
+#################################################################
+# Data properties – ClauseOccurrence
+#################################################################
+
+ex:clauseType a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "clause type" ;
+  rdfs:comment "e.g., term_termination, compensation, force_majeure, exclusions, confidentiality." .
+
+ex:sectionNumber a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "section number" .
+
+ex:clauseHeading a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "clause heading" .
+
+ex:clauseText a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "clause text" .
+
+ex:isStandardClause a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:boolean ;
+  rdfs:label "is standard clause" .
+
+ex:deviationType a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "deviation type" ;
+  rdfs:comment "e.g., missing, modified, additional." .
+
+ex:riskLabel a owl:DatatypeProperty ;
+  rdfs:domain ex:ClauseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "risk label" ;
+  rdfs:comment "Qualitative risk category: low/medium/high." .
+
+#################################################################
+# Data properties – PriceIncreaseOccurrence
+#################################################################
+
+ex:priceIncreasePresent a owl:DatatypeProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range xsd:boolean ;
+  rdfs:label "price increase present" .
+
+ex:increaseType a owl:DatatypeProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "increase type" ;
+  rdfs:comment "e.g., fixed_percentage, cpi_indexed, stair_step, per_form_annual, other." .
+
+ex:increaseCapPercent a owl:DatatypeProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range xsd:decimal ;
+  rdfs:label "increase cap percent" .
+
+ex:increaseFrequency a owl:DatatypeProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "increase frequency" ;
+  rdfs:comment "e.g., annual, at_renewal, per_form_annual, ad_hoc." .
+
+ex:indexReference a owl:DatatypeProperty ;
+  rdfs:domain ex:PriceIncreaseOccurrence ;
+  rdfs:range xsd:string ;
+  rdfs:label "index reference" ;
+  rdfs:comment "e.g., CPI, specific inflation index name." .
+
+#################################################################
+# Data properties – Occurrence-level (events, location)
+#################################################################
+
+ex:eventDate a owl:DatatypeProperty ;
+  rdfs:domain ex:OccurrenceEntity ;
+  rdfs:range xsd:dateTime ;
+  rdfs:label "event date/time" ;
+  rdfs:comment "Date/time of the occurrence or event, if applicable." .
+
+ex:pageNumber a owl:DatatypeProperty ;
+  rdfs:domain ex:OccurrenceEntity ;
+  rdfs:range xsd:integer ;
+  rdfs:label "page number" ;
+  rdfs:comment "Page on which the occurrence/event is primarily located." .
+
+#################################################################
+# Data properties – SignatureEvent
+#################################################################
+
+ex:signatureMethod a owl:DatatypeProperty ;
+  rdfs:domain ex:SignatureEvent ;
+  rdfs:range xsd:string ;
+  rdfs:label "signature method" ;
+  rdfs:comment "wet_ink, digital, e_signature, etc." .

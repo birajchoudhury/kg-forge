@@ -22,7 +22,6 @@ from kg_forge.extraction.exceptions import (
 )
 from kg_forge.nlp.gliner_wrapper import GLiNERWrapper, FakeGLiNERWrapper, GLINER_AVAILABLE
 from kg_forge.llm.bedrock_client import BedrockClient, FakeBedrockClient
-from kg_forge.llm.prompt_builder import PromptBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,6 @@ class HybridExtractionBackend(BaseExtractionBackend):
         # Components
         self.gliner_wrapper = None
         self.bedrock_client = None
-        self.prompt_builder = None  # Created per-extraction with ontology
         
         # Statistics
         self.total_extractions = 0

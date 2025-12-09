@@ -11,6 +11,26 @@ import json
 
 
 @dataclass
+class Dependency:
+    """Entity dependency specification for occurrence entities.
+    
+    Represents a required relationship between an occurrence entity
+    and a core entity, with cardinality constraints.
+    """
+    role: str           # e.g., "contract", "template"
+    entity: str         # e.g., "Contract", "Template"  
+    cardinality: str    # "1", "0..1", "1..*", "0..*"
+    
+    def to_dict(self) -> Dict[str, str]:
+        """Convert to dictionary."""
+        return {
+            "role": self.role,
+            "entity": self.entity,
+            "cardinality": self.cardinality
+        }
+
+
+@dataclass
 class Property:
     """Entity or relation property definition."""
     name: str
@@ -25,8 +45,10 @@ class EntityType:
     name: str                       # e.g., "Product", "Team"
     iri: str                        # e.g., "http://example.org/ont#Product"
     description: str                # Natural language description
+    kind: str = "core"              # "core" or "occurrence"
     properties: List[Property] = field(default_factory=list)
     examples: List[str] = field(default_factory=list)  # Example entity names
+    depends_on: List[Dependency] = field(default_factory=list)  # Dependencies for occurrence entities
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -34,6 +56,7 @@ class EntityType:
             "name": self.name,
             "iri": self.iri,
             "description": self.description,
+            "kind": self.kind,
             "properties": [
                 {
                     "name": p.name,
@@ -42,7 +65,8 @@ class EntityType:
                     "required": p.required
                 } for p in self.properties
             ],
-            "examples": self.examples
+            "examples": self.examples,
+            "depends_on": [dep.to_dict() for dep in self.depends_on]
         }
 
 
@@ -149,6 +173,74 @@ class OntologySchema:
         }
         return json.dumps(prompt_data, indent=2)
     
+    def to_entity_config(self) -> Dict[str, Any]:
+        """Generate entity config JSON for config-driven LLM extraction.
+        
+        This method produces a simplified JSON structure optimized for LLM prompts
+        that includes entity kind, properties, relations, and dependencies.
+        
+        Returns:
+            Dictionary with structure:
+            {
+                "entities": {
+                    "<EntityName>": {
+                        "kind": "core" | "occurrence",
+                        "label": "Entity label",
+                        "description": "Entity description",
+                        "properties": {
+                            "<propName>": {"type": "string|number|..."}
+                        },
+                        "relations": {
+                            "<relationName>": {"target": "<TargetEntity>", "description": "..."}
+                        },
+                        "depends_on": [
+                            {"role": "...", "entity": "...", "cardinality": "..."}
+                        ]
+                    }
+                }
+            }
+        """
+        config = {"entities": {}}
+        
+        for entity_name, entity in self.entities.items():
+            # Convert properties from list to dict
+            properties_dict = {}
+            for prop in entity.properties:
+                properties_dict[prop.name] = {
+                    "type": prop.datatype or "string"
+                }
+                if prop.description:
+                    properties_dict[prop.name]["description"] = prop.description
+                if prop.required:
+                    properties_dict[prop.name]["required"] = True
+            
+            # Find relations where this entity is the source (head)
+            relations_dict = {}
+            for rel_name, relation in self.relations.items():
+                if entity_name in relation.head_types:
+                    # For each valid target
+                    for tail_type in relation.tail_types:
+                        relations_dict[rel_name] = {
+                            "target": tail_type
+                        }
+                        if relation.description:
+                            relations_dict[rel_name]["description"] = relation.description
+                        # Only store first target to keep it simple
+                        # (In practice, most relations have single target type)
+                        break
+            
+            # Build entity config
+            config["entities"][entity_name] = {
+                "kind": entity.kind,
+                "label": entity.name,
+                "description": entity.description,
+                "properties": properties_dict,
+                "relations": relations_dict,
+                "depends_on": [dep.to_dict() for dep in entity.depends_on]
+            }
+        
+        return config
+    
     def get_entity_type(self, name: str) -> Optional[EntityType]:
         """Get entity type by name."""
         return self.entities.get(name)
@@ -175,6 +267,32 @@ class OntologySchema:
         return (head_type in relation.head_types and
                 tail_type in relation.tail_types)
     
+    def get_dependencies(self, entity_name: str) -> List[Dependency]:
+        """Get dependencies for an entity.
+        
+        Args:
+            entity_name: Name of the entity type
+            
+        Returns:
+            List of dependencies (empty if entity is core or has no dependencies)
+        """
+        entity = self.entities.get(entity_name)
+        if entity and entity.kind == "occurrence":
+            return entity.depends_on
+        return []
+    
+    def is_occurrence_entity(self, entity_name: str) -> bool:
+        """Check if an entity is an occurrence entity.
+        
+        Args:
+            entity_name: Name of the entity type
+            
+        Returns:
+            True if entity is occurrence type, False otherwise
+        """
+        entity = self.entities.get(entity_name)
+        return entity.kind == "occurrence" if entity else False
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -197,12 +315,17 @@ class OntologySchema:
             properties = [
                 Property(**prop) for prop in entity_data.get("properties", [])
             ]
+            dependencies = [
+                Dependency(**dep) for dep in entity_data.get("depends_on", [])
+            ]
             entities[name] = EntityType(
                 name=entity_data["name"],
                 iri=entity_data["iri"],
                 description=entity_data["description"],
+                kind=entity_data.get("kind", "core"),
                 properties=properties,
-                examples=entity_data.get("examples", [])
+                examples=entity_data.get("examples", []),
+                depends_on=dependencies
             )
         
         relations = {}

@@ -6,8 +6,6 @@ Defines the common interface for all extraction backends (LLM, spaCy, hybrid, fa
 
 from kg_forge.extraction.interface import ExtractionBackend, BaseExtractionBackend
 from kg_forge.extraction.llm_backend import LLMExtractionBackend
-from kg_forge.extraction.spacy_backend import SpacyLexicalBackend
-from kg_forge.extraction.hybrid_backend import HybridExtractionBackend
 from kg_forge.extraction.fake_backend import FakeExtractionBackend
 from kg_forge.extraction.exceptions import (
     ExtractionError,
@@ -16,6 +14,11 @@ from kg_forge.extraction.exceptions import (
     ConsecutiveFailureError,
     ExtractionTimeoutError
 )
+
+# Lazy imports for backends that require Python 3.10+
+# These will be imported on-demand in create_extraction_backend()
+SpacyLexicalBackend = None
+HybridExtractionBackend = None
 
 __all__ = [
     "ExtractionBackend",

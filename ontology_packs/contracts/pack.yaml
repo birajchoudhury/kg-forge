@@ -1,0 +1,88 @@
+id: contracts
+name: Contracts Ontology
+description: Comprehensive ontology for contract analysis including core entities (Contract, Organization, Person) and occurrence entities (Clause Occurrence, Signature Event, Renewal Event, Price Increase)
+version: 1.0.0
+author: KG Forge Team
+license: MIT
+tags:
+  - contracts
+  - legal
+  - compliance
+  - clauses
+  - commercial
+
+# Visual styling configuration for entities and relationships
+styles:
+  entity_colors:
+    Contract: "#1f77b4"
+    Organization: "#ff7f0e"
+    Person: "#2ca02c"
+    "Clause Template": "#d62728"
+    "Clause Occurrence": "#9467bd"
+    "Signature Event": "#8c564b"
+    "Renewal Event": "#e377c2"
+    "Price Increase Occurrence": "#7f7f7f"
+  
+  entity_shapes:
+    Contract: "dot"
+    Organization: "dot"
+    Person: "dot"
+    "Clause Template": "dot"
+    "Clause Occurrence": "dot"
+    "Signature Event": "dot"
+    "Renewal Event": "dot"
+    "Price Increase Occurrence": "dot"
+  
+  relationship_colors:
+    HAS_PARTY: "#1f77b4"
+    HAS_CUSTOMER: "#ff7f0e"
+    HAS_VENDOR: "#2ca02c"
+    HAS_CLAUSE_OCCURRENCE: "#9467bd"
+    OF_CONTRACT: "#d62728"
+    HAS_SIGNATURE_EVENT: "#8c564b"
+    HAS_SIGNER: "#e377c2"
+    HAS_RENEWAL_EVENT: "#7f7f7f"
+    HAS_PRICE_INCREASE_OCCURRENCE: "#bcbd22"
+    BASED_ON_CLAUSE: "#17becf"
+  
+  relationship_styles:
+    HAS_PARTY:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_CUSTOMER:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_VENDOR:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_CLAUSE_OCCURRENCE:
+      width: 2
+      arrows: "to"
+      dashes: false
+    OF_CONTRACT:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_SIGNATURE_EVENT:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_SIGNER:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_RENEWAL_EVENT:
+      width: 2
+      arrows: "to"
+      dashes: false
+    HAS_PRICE_INCREASE_OCCURRENCE:
+      width: 2
+      arrows: "to"
+      dashes: false
+    BASED_ON_CLAUSE:
+      width: 2
+      arrows: "to"
+      dashes: true

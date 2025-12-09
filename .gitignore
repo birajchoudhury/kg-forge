@@ -79,6 +79,10 @@ output/
 !specs/**/*.md
 !*.egg-info/*.md
 
+# Test data files (may contain sensitive content)
+test_data/*.docx
+test_docs/*.html
+
 # Personal configuration and sensitive data
 .env
 kg_forge.yaml
@@ -109,12 +113,12 @@ postgres-data/
 
 # Generated HTML visualization files
 *.html
-!test_data/*.html
-!test_docs/*.html
 
 # Test data PDFs (may contain sensitive content)
 test_data/*.pdf
 test_docs/*.pdf
+test_data/*.docx
+test_docs/*.docx
 
 # Demo and test scripts in root directory (not in tests/)
 demo_*.py
@@ -123,6 +127,8 @@ simple_*.py
 query_results.py
 analyze_results.py
 test_*.py
+fix_*.py
+show_*.py
 !tests/**/test_*.py
 
 # Additional virtual environments

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/birajchoudhury/kg-forge/actions/workflows/ci.yml)
 ![Coverage](https://raw.githubusercontent.com/birajchoudhury/kg-forge/badges/.github/coverage.svg)
-![Tests](https://img.shields.io/badge/tests-493%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-577%20passed-brightgreen)
 
 A comprehensive CLI tool for building knowledge graphs from unstructured documents. Extract entities and relationships using flexible curation and extraction backends, with built-in deduplication and interactive graph visualization.
 
@@ -13,16 +13,21 @@ Knowledge Graph Forge is a powerful command-line tool that transforms unstructur
 ### Key Features
 
 - **Flexible Document Curation**: Choose between Docling (local, fast) or Hyland Knowledge Enrichment (cloud-based, optimized)
-- **Multiple Extraction Pipelines**: 
+- **Multiple Extraction Approaches**: 
+  - **Config-Driven**: Define entity schemas with core/occurrence entity types and dependencies in JSON config
+  - **Schema-Driven**: Extract structured entities with properties, links, and span information using LLM
   - **LLM-based**: Full entity and relation extraction using AWS Bedrock
   - **Neural NLP**: Zero-shot extraction with spaCy + GLiNER + GLiREL (no training required)
   - **Hybrid**: Combines GLiNER entity detection with LLM property/relation enrichment
-- **Industry-Standard Ontologies**: Support for both TTL (Turtle/RDF) and Markdown ontology formats
+- **Ontology Format Support**: 
+  - TTL (Turtle/RDF) format with automatic conversion to extraction configs
+  - Markdown format for simple entity definitions
+  - JSON entity configs with core/occurrence entities and dependencies
 - **Advanced Entity Deduplication**: Built-in support for Splink (probabilistic) and Zingg (ML-based) deduplication
 - **Ontology Management**: Define entity types, relationships, and extraction rules using modular, swappable ontology packs
 - **Interactive Visualization**: Generate beautiful HTML visualizations of knowledge graphs and ontologies
 - **Neo4j Integration**: Full Neo4j support with namespace isolation for multi-tenant experimentation
-- **Production Ready**: Comprehensive test suite (493+ tests) with both unit and integration testing
+- **Production Ready**: Comprehensive test suite (577+ passing) with both unit and integration testing
 
 The tool addresses key challenges in knowledge graph construction:
 - How to curate and extract meaningful entities from diverse document formats (HTML, PDF, DOCX, TXT, XML)
@@ -55,6 +60,8 @@ kg_forge/
 │   │   └── errors.py            # Curation exceptions
 │   ├── extraction/              # Entity extraction backends
 │   │   ├── interface.py         # Common interfaces
+│   │   ├── config_driven.py     # Config-driven extraction (core + occurrence entities)
+│   │   ├── schema_driven_extractor.py  # Schema-driven structured extraction
 │   │   ├── llm_backend.py       # LLM-based extraction
 │   │   ├── spacy_backend.py     # Neural NLP pipeline (GLiNER + GLiREL)
 │   │   ├── hybrid_backend.py    # Hybrid GLiNER + LLM extraction
@@ -85,8 +92,9 @@ kg_forge/
 │   ├── ontology/                # Ontology management system
 │   │   ├── base.py              # Base classes and registry
 │   │   ├── filesystem_pack.py   # File-based ontology packs
-│   │   ├── schema.py            # Normalized OntologySchema representation
+│   │   ├── schema.py            # Normalized OntologySchema with dependencies support
 │   │   ├── ttl_loader.py        # TTL/RDF ontology loader (industry standard)
+│   │   ├── ttl_to_config.py     # TTL to JSON config converter
 │   │   ├── markdown_loader.py   # Markdown ontology loader (legacy)
 │   │   └── models.py            # Ontology data models (deprecated, use entities/)
 │   ├── entities/                # Entity definition system
@@ -144,8 +152,11 @@ kg_forge/
 │   ├── test_core_integration.py # Core integration tests
 │   └── test_end_to_end.py       # Full pipeline tests
 ├── ontology_packs/              # Ontology pack definitions
-│   └── ai_ml_confluence/        # AI/ML domain ontology pack
-│       ├── entities/            # Entity type definitions
+│   ├── contracts/               # Contracts domain ontology (TTL format)
+│   │   ├── ontology.ttl         # Contract entity definitions in RDF/OWL
+│   │   └── pack.yaml            # Pack metadata
+│   └── confluence/              # Confluence documentation ontology
+│       ├── entities/            # Entity type definitions (Markdown)
 │       ├── templates/           # Prompt templates
 │       ├── styles/              # Visualization styles
 │       └── ontology.yaml        # Pack configuration
@@ -162,11 +173,15 @@ kg_forge/
 │   ├── 07-ingest-pipeline.md                # Pipeline orchestration
 │   └── 08-graph-rendering-and-exploration.md # Graph visualization
 ├── docs/                        # Documentation
+│   ├── CONFIG_DRIVEN_EXTRACTION.md  # Config-driven extraction guide
+│   ├── CONTRACTS_ONTOLOGY_SETUP.md  # Contracts ontology setup
 │   ├── CI_SETUP.md              # CI/CD setup guide
 │   ├── HYLAND_KE_IMPLEMENTATION.md  # Hyland KE guide
 │   ├── ONTOLOGY_PACKS.md        # Ontology pack system
 │   ├── PARSING_HTML.md          # HTML parsing
 │   └── AWS_AUTHENTICATION.md    # AWS credentials setup
+├── examples/                    # Usage examples
+│   └── config_driven_extraction_example.py  # Config-driven extraction demo
 ├── test_data/                   # Test documents
 ├── requirements.txt             # Project dependencies
 ├── setup.py                     # Package setup file
@@ -415,9 +430,16 @@ kg-forge ontology discover --directory /path/to/ontologies/
 
 **Ontology Format Support:**
 - **TTL (Turtle/RDF)**: Industry-standard format using RDF/OWL semantics (`.ttl` files)
+  - Supports core/occurrence entity classification
+  - Automatic dependency extraction from OWL restrictions
+  - Converts to JSON entity config for config-driven extraction
+- **JSON Entity Config**: Direct entity configuration with core/occurrence entities and dependencies
+  - Core entities: Standalone entities extracted first
+  - Occurrence entities: Event-like entities that link to core entities
+  - Dependency specification with cardinality (1, 0..1, 1..*)
 - **Markdown**: Legacy format for simple entity definitions (`entities/*.md` files)
 - Automatic format detection based on files present in ontology pack
-- Both formats normalized to common `OntologySchema` for consistent extraction
+- All formats normalized to common `OntologySchema` for consistent extraction
 
 #### Export/Import Operations
 ```bash
@@ -560,10 +582,15 @@ The integration tests cover:
 
 #### Test Coverage
 
-- **Unit Tests**: 390+ tests covering all components (CLI, curation, extraction, deduplication, linking, parsers, ontology management)
-- **Integration Tests**: 85+ tests with real Neo4j database operations and end-to-end pipeline testing
-- **Total**: 475+ comprehensive tests with continuous integration
-- **Coverage**: Extensive coverage of core functionality, edge cases, and error conditions including real-world API testing
+- **Unit Tests**: 490+ tests covering all components (CLI, curation, extraction, deduplication, linking, parsers, ontology management)
+- **Integration Tests**: 90+ tests with real Neo4j database operations and end-to-end pipeline testing
+- **Total**: 577 passing tests (97% pass rate) with continuous integration
+- **Coverage**: Extensive coverage of core functionality, edge cases, and error conditions including:
+  - Config-driven extraction with core/occurrence entities
+  - Schema-driven extraction with structured output
+  - TTL to config conversion
+  - Enhanced OntologySchema with dependencies
+  - Real-world API testing for Hyland KE and AWS Bedrock
 
 ## Features
 
@@ -591,9 +618,12 @@ The integration tests cover:
 
 **Ontology System**
 - Industry-standard TTL (Turtle/RDF) ontology support with automatic parsing
+- TTL to JSON entity config converter for config-driven extraction
+- Support for core/occurrence entity types with dependencies
+- Cardinality specification for entity relationships (1, 0..1, 1..*)
 - Legacy Markdown format support for backward compatibility
 - Automatic format detection and normalization to unified `OntologySchema`
-- Backend-specific config generation (GLiNER, GLiREL, LLM prompts)
+- Backend-specific config generation (GLiNER, GLiREL, LLM prompts, Entity Config)
 - Dynamic ontology activation and validation
 - Entity relationship schema management with domain/range constraints
 
@@ -605,9 +635,11 @@ The integration tests cover:
 
 **Developer Experience**  
 - Comprehensive CLI with 15+ commands
-- Extensive test suite (493+ tests) with 100% CI/CD pipeline
+- Extensive test suite (577 passing tests, 97% pass rate) with full CI/CD pipeline
+- Multiple extraction patterns: config-driven, schema-driven, backend-based
 - Docker integration for Neo4j
 - Rich configuration management (YAML + environment variables)
+- Example scripts and detailed documentation
 - Detailed logging and error handling
 
 ## Practical Use Cases

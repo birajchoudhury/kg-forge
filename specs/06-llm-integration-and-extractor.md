@@ -474,50 +474,65 @@ No heavy additional dependencies unrelated to LLM integration are introduced.
 
 ## Implementation Details
 
-### Prompt Builder (`kg_forge/llm/prompt_builder.py`)
+### Schema-Driven Extraction (`kg_forge/extraction/schema_driven_extractor.py`)
+
+The LLM extraction backend now uses a **schema-driven approach** that works with any ontology:
 
 ```python
-class PromptBuilder:
-    def __init__(self, entity_loader: EntityDefinitionLoader):
-        self.entity_loader = entity_loader
+def extract_entities_from_document(
+    entity_config: Dict[str, Any],
+    doc_id: str,
+    doc_title: str,
+    doc_text: str,
+    llm_client: SchemaLLMClient
+) -> Dict[str, Any]:
+    """
+    Extract entities using schema-driven prompts.
     
-    def build_prompt(self, document_content: str, entities_dir: Path, 
-                    template_file: Path) -> str:
-        # Load and merge entity definitions
-        definitions = self.entity_loader.load_entity_definitions(entities_dir)
-        template_content = self.entity_loader.load_prompt_template(template_file)
-        merged_prompt = self.entity_loader.build_merged_prompt(template_content, definitions)
-        
-        # Inject document content
-        return merged_prompt.replace('{{DOCUMENT_CONTENT}}', document_content)
+    Args:
+        entity_config: Entity configuration from ontology.to_entity_config()
+        doc_id: Document identifier
+        doc_title: Document title
+        doc_text: Document content
+        llm_client: LLM client adapter
+    
+    Returns:
+        Dict with 'core_entities' and 'occurrence_entities'
+    """
+    # Build generic prompts that work with any ontology
+    system_prompt = build_system_prompt()
+    user_prompt = build_user_prompt(entity_config, doc_id, doc_title, doc_text)
+    
+    # Call LLM
+    response_text = llm_client.generate(system_prompt, user_prompt)
+    
+    # Parse and validate response
+    result = _parse_json_response(response_text)
+    
+    # Normalize and validate entities against schema
+    core_entities = _normalize_entities(
+        result.get("core_entities", []), 
+        entity_config, 
+        is_occurrence=False
+    )
+    occurrence_entities = _normalize_entities(
+        result.get("occurrence_entities", []), 
+        entity_config, 
+        is_occurrence=True
+    )
+    
+    return {
+        "core_entities": core_entities,
+        "occurrence_entities": occurrence_entities
+    }
 ```
 
-### Response Parser (`kg_forge/llm/parser.py`)
+### Key Components
 
-```python
-class ResponseParser:
-    def parse_extraction_result(self, response_text: str) -> ExtractionResult:
-        try:
-            # Strict JSON parsing (preferred approach)
-            data = json.loads(response_text.strip())
-            
-            # Validate top-level structure
-            if not isinstance(data, dict) or 'entities' not in data:
-                raise ValidationError("Response missing 'entities' field")
-            
-            # Parse entities
-            entities = []
-            for entity_data in data['entities']:
-                entity = self._parse_entity(entity_data)
-                entities.append(entity)
-            
-            return ExtractionResult(entities=entities)
-            
-        except json.JSONDecodeError as e:
-            raise ParseError(f"Invalid JSON response: {e}")
-    
-    def _parse_entity(self, entity_data: dict) -> ExtractedEntity:
-        # Validate required fields
+1. **Generic System Prompt**: Explains the entity_config format and output structure
+2. **Dynamic User Prompt**: Includes entity_config + document content
+3. **Automatic Validation**: Validates entities against schema, enforces dependencies
+4. **Auto-Correction**: Moves misclassified entities to correct categories
         if 'type' not in entity_data or 'name' not in entity_data:
             raise ValidationError("Entity missing required 'type' or 'name' field")
         

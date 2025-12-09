@@ -237,8 +237,7 @@ relationships:
 
 ### Phase 4: Integration & Extensions
 1. **Integration with existing systems**
-   - EntityDefinitionLoader compatibility
-   - PromptBuilder integration
+   - Schema-driven extraction backend compatibility
    - CLI help system updates
 
 2. **Extensibility features**
@@ -257,7 +256,7 @@ relationships:
 ### Integration Tests
 - **Pack lifecycle**: Registration → Activation → Usage → Deactivation
 - **Configuration integration**: Settings loading, default activation
-- **Cross-component**: Integration with EntityDefinitionLoader, PromptBuilder
+- **Cross-component**: Integration with schema-driven extraction backend
 
 ### Test Data
 - **Sample ontology packs**: Multiple packs with different structures

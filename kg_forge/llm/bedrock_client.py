@@ -69,12 +69,28 @@ class BedrockClient:
     def _init_client(self):
         """Initialize the LlamaIndex Bedrock LLM client."""
         try:
-            self._llm = Bedrock(
-                model=self.model_name,
-                region_name=self.region,
-                max_tokens=self.max_tokens,
-                temperature=self.temperature
-            )
+            # Determine context size based on model
+            context_size = None
+            if "nova" in self.model_name.lower():
+                context_size = 300000  # Nova models support 300k context
+            elif "claude-3-5-sonnet" in self.model_name.lower():
+                context_size = 200000  # Claude 3.5 Sonnet
+            elif "claude-3" in self.model_name.lower():
+                context_size = 200000  # Claude 3 models
+            
+            # Build client parameters
+            client_params = {
+                "model": self.model_name,
+                "region_name": self.region,
+                "max_tokens": self.max_tokens,
+                "temperature": self.temperature
+            }
+            
+            # Add context_size for non-foundation models
+            if context_size:
+                client_params["context_size"] = context_size
+            
+            self._llm = Bedrock(**client_params)
             logger.info(f"Initialized Bedrock LLM client: {self.model_name} in {self.region}")
         except NoCredentialsError:
             raise CredentialsError(
@@ -119,8 +135,13 @@ class BedrockClient:
             logger.info(f"Calling Bedrock model {self.model_name}", extra={
                 "doc_id": doc_id,
                 "prompt_length": len(prompt),
+                "prompt_words": len(prompt.split()),
                 "max_tokens": self.max_tokens
             })
+            
+            # Log prompt preview for debugging
+            logger.debug(f"Prompt preview (first 1000 chars): {prompt[:1000]}")
+            logger.debug(f"Prompt preview (last 500 chars): {prompt[-500:]}")
             
             # Use LlamaIndex's complete method
             response = self._llm.complete(prompt)
@@ -218,29 +239,50 @@ class FakeBedrockClient:
         """Return fake model response."""
         self.call_count += 1
         
-        # Generate fake response that looks like entity extraction JSON
-        fake_response = {
-            "entities": [
-                {
-                    "type": "Product",
-                    "name": "Test Product",
-                    "confidence": 0.9
-                },
-                {
-                    "type": "Technology", 
-                    "name": "Test Technology",
-                    "confidence": 0.85
-                }
-            ],
-            "relations": [
-                {
-                    "source": "Test Product",
-                    "target": "Test Technology", 
-                    "type": "USES",
-                    "confidence": 0.8
-                }
-            ]
-        }
+        # Detect which format to use based on prompt content
+        if "core_entities" in prompt and "occurrence_entities" in prompt:
+            # Schema-driven extraction format
+            fake_response = {
+                "core_entities": [
+                    {
+                        "entity_id": "test_entity_1",
+                        "type": "Product",
+                        "properties": {
+                            "name": "Test Product",
+                            "version": "1.0"
+                        },
+                        "span": {
+                            "start_offset": 0,
+                            "end_offset": 12
+                        }
+                    }
+                ],
+                "occurrence_entities": []
+            }
+        else:
+            # Legacy format
+            fake_response = {
+                "entities": [
+                    {
+                        "type": "Product",
+                        "name": "Test Product",
+                        "confidence": 0.9
+                    },
+                    {
+                        "type": "Technology", 
+                        "name": "Test Technology",
+                        "confidence": 0.85
+                    }
+                ],
+                "relations": [
+                    {
+                        "source": "Test Product",
+                        "target": "Test Technology", 
+                        "type": "USES",
+                        "confidence": 0.8
+                    }
+                ]
+            }
         
         response_text = json.dumps(fake_response, indent=2)
         
