@@ -326,25 +326,32 @@ class TTLOntologyLoader:
         Returns:
             "core" or "occurrence"
         """
-        # Define custom namespace for entity kind annotation
-        EX = Namespace("http://example.org/ontology#")
-        
-        # Check for explicit annotation
-        for kind_value in self.graph.objects(class_uri, EX.entityKind):
-            kind = str(kind_value).lower()
-            if kind in ["core", "occurrence"]:
-                return kind
+        # Try to find entityKind annotation dynamically across all namespaces
+        # First, search for any entityKind property in the graph
+        for s, p, o in self.graph:
+            if str(p).endswith("entityKind") or str(p).endswith("#entityKind"):
+                # Found the entityKind property, check if it applies to our class
+                for kind_value in self.graph.objects(class_uri, p):
+                    kind = str(kind_value).lower()
+                    if kind in ["core", "occurrence"]:
+                        logger.debug(f"Found entityKind annotation for {class_uri}: {kind}")
+                        return kind
+                # Found the property but not for this class, continue to inheritance check
+                break
         
         # Check inheritance from CoreEntity or OccurrenceEntity
         for parent in self.graph.objects(class_uri, RDFS.subClassOf):
             if isinstance(parent, URIRef):
                 parent_label = self._get_label(parent)
                 if parent_label == "CoreEntity":
+                    logger.debug(f"Determined kind 'core' for {class_uri} via CoreEntity inheritance")
                     return "core"
                 elif parent_label == "OccurrenceEntity":
+                    logger.debug(f"Determined kind 'occurrence' for {class_uri} via OccurrenceEntity inheritance")
                     return "occurrence"
         
         # Default to core
+        logger.debug(f"Defaulting to kind 'core' for {class_uri}")
         return "core"
     
     def _extract_dependencies(self, class_uri: URIRef) -> List[Dependency]:

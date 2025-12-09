@@ -190,8 +190,8 @@ class LLMExtractionBackend(BaseExtractionBackend):
             
             logger.debug(f"Converted ontology to entity config", extra={
                 "doc_id": doc_id,
-                "core_entities": len([e for e in entity_config.get('entities', []) if not e.get('is_occurrence_entity')]),
-                "occurrence_entities": len([e for e in entity_config.get('entities', []) if e.get('is_occurrence_entity')])
+                "core_entities": len([e for e, cfg in entity_config.get('entities', {}).items() if cfg.get('kind') == 'core']),
+                "occurrence_entities": len([e for e, cfg in entity_config.get('entities', {}).items() if cfg.get('kind') == 'occurrence'])
             })
             
             # Use schema-driven extraction
@@ -283,30 +283,44 @@ class LLMExtractionBackend(BaseExtractionBackend):
             mention = self._entity_to_mention(entity, doc_id, is_occurrence=False)
             if mention:
                 mentions.append(mention)
-                entity_map[entity.get("entity_id")] = mention.text
+                # Map entity_id to mention ID (not surface text)
+                entity_map[entity.get("entity_id")] = mention.id
         
         # Process occurrence entities and their relations
         for entity in result.get("occurrence_entities", []):
             mention = self._entity_to_mention(entity, doc_id, is_occurrence=True)
             if mention:
                 mentions.append(mention)
-                entity_map[entity.get("entity_id")] = mention.text
+                # Map entity_id to mention ID (not surface text)
+                entity_map[entity.get("entity_id")] = mention.id
                 
                 # Extract relations from links
-                for link in entity.get("links", []):
-                    relation = LexicalRelation(
-                        source_mention=mention.text,
-                        target_mention=entity_map.get(link.get("entity_id"), link.get("entity_id")),
-                        relation_type=link.get("relation_type", "RELATED_TO"),
-                        confidence=1.0,
-                        metadata={
-                            "from_occurrence_entity": True,
-                            "dependency": link.get("dependency", ""),
-                            "source_entity_type": entity.get("type"),
-                            "source_entity_id": entity.get("entity_id")
-                        }
-                    )
-                    relations.append(relation)
+                for role, target_value in entity.get("links", {}).items():
+                    # target_value can be a single entity_id (string) or list of entity_ids
+                    target_ids = target_value if isinstance(target_value, list) else [target_value] if target_value else []
+                    
+                    for target_entity_id in target_ids:
+                        # Get target mention ID
+                        target_mention_id = entity_map.get(target_entity_id)
+                        if not target_mention_id:
+                            logger.warning(f"Could not find target entity {target_entity_id} for link {role}")
+                            continue
+                        
+                        relation = LexicalRelation(
+                            id=f"{mention.id}_{role}_{target_mention_id}",
+                            type=role,  # Use role as relation type
+                            src_mention_id=mention.id,
+                            dst_mention_id=target_mention_id,
+                            features={
+                                "from_occurrence_entity": True,
+                                "dependency": role,
+                                "confidence": 1.0,
+                                "source_entity_type": entity.get("type"),
+                                "source_entity_id": entity.get("entity_id"),
+                                "target_entity_id": target_entity_id
+                            }
+                        )
+                        relations.append(relation)
         
         # Create graph
         graph = LexicalGraph(
@@ -361,22 +375,32 @@ class LLMExtractionBackend(BaseExtractionBackend):
             
             # Get span information
             span_info = entity.get("span", {})
-            start_offset = span_info.get("start_offset", 0)
-            end_offset = span_info.get("end_offset", start_offset + len(text))
+            start_offset = span_info.get("start_offset")
+            end_offset = span_info.get("end_offset")
+            
+            # Handle missing span information
+            if start_offset is None:
+                start_offset = 0
+            if end_offset is None:
+                end_offset = start_offset + len(text)
+            
+            # Create enhanced features including metadata
+            enhanced_features = {
+                **properties,
+                "confidence": 1.0,
+                "entity_id": entity.get("entity_id"),
+                "is_occurrence_entity": is_occurrence
+            }
             
             # Create mention
             mention = LexicalMention(
-                text=text,
+                id=entity.get("entity_id", f"{doc_id}_{entity_type}_{start_offset}"),
+                doc_id=doc_id,
+                surface=text,
                 entity_type=entity_type,
                 start_offset=start_offset,
                 end_offset=end_offset,
-                confidence=1.0,
-                features=properties,
-                metadata={
-                    "entity_id": entity.get("entity_id"),
-                    "is_occurrence_entity": is_occurrence,
-                    "doc_id": doc_id
-                }
+                features=enhanced_features
             )
             
             return mention
